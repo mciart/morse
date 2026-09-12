@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
   "guide_layout": "desktop",
   "guide_auto_fit": True,
   "guide_compact": False,
+  "guide_compact_scale": None,
   "show_mouse": False,
   "keylen": 1,
   "keyone": "SPACE",
@@ -941,6 +942,7 @@ class Window(QDialog):
             view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
             view.autoFitChanged.connect(self.changeGuideAutoFit)
             view.compactModeChanged.connect(self.changeGuideCompact)
+            view.compactScaleChanged.connect(self.changeGuideCompactScale)
         self.updateOutputState()
         if not self._start_hidden:
             view.show()
@@ -986,6 +988,11 @@ class Window(QDialog):
         self.compactGuideAction.setChecked(enabled)
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setCompactMode(enabled)
+        self.configManager.save_config(self.configManager.config)
+
+    def changeGuideCompactScale(self, scale):
+        self.config['guide_compact_scale'] = float(scale)
+        self.configManager.config['guide_compact_scale'] = float(scale)
         self.configManager.save_config(self.configManager.config)
 
     def toggleSound(self):

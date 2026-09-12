@@ -1,7 +1,7 @@
 """Verify the unified guide against the real dispatch path, without OS input."""
 
 import json
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSizeF, Qt
 from PyQt5.QtGui import QMouseEvent
 from unittest import TestCase
 from unittest.mock import call, patch
@@ -21,6 +21,36 @@ class UnifiedGuideTests(TestCase):
     def setUp(self):
         mapping.MappingActionTests.setUp(self)
         self.select_page('desktop')
+        self.app.processEvents()
+
+    def assert_compact_board_fits(self, view):
+        viewport = view.scroll_area
+        board = viewport.mapFromScene(viewport.sceneRect()).boundingRect()
+        self.assertEqual(viewport.geometry(), view.rect())
+        self.assertLessEqual(abs(board.width() - view.width()), 2)
+        self.assertLessEqual(abs(board.height() - view.height()), 2)
+        self.assertEqual(viewport.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(viewport.verticalScrollBar().maximum(), 0)
+        clip = viewport.viewport().rect().adjusted(-2, -2, 2, 2)
+        for cap in view.crs.values():
+            if cap.isVisible():
+                scene_bounds = QRectF(QPointF(cap.mapTo(view.chart_widget, QPoint())), QSizeF(cap.size()))
+                self.assertTrue(clip.contains(viewport.mapFromScene(scene_bounds).boundingRect()), cap.item['action'])
+        self.assertTrue(all(label.isHidden() for label in view._annotations))
+
+    def drag_compact_viewport(self, view, start, delta):
+        """Deliver Qt pointer events only; never move or inject the OS mouse."""
+        viewport = view.scroll_area.viewport()
+        start = QPointF(start)
+        global_start = QPointF(viewport.mapToGlobal(start.toPoint()))
+        global_end = global_start + QPointF(delta)
+        events = (
+            QMouseEvent(QEvent.MouseButtonPress, start, global_start, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier),
+            QMouseEvent(QEvent.MouseMove, start + QPointF(delta), global_end, Qt.NoButton, Qt.LeftButton, Qt.NoModifier),
+            QMouseEvent(QEvent.MouseButtonRelease, start + QPointF(delta), global_end, Qt.LeftButton, Qt.NoButton, Qt.NoModifier),
+        )
+        for event in events:
+            self.app.sendEvent(viewport, event)
         self.app.processEvents()
 
     def test_every_action_is_registered_and_keyboard_codes_are_preserved(self):
@@ -395,6 +425,177 @@ class UnifiedGuideTests(TestCase):
             self.app.processEvents()
             self.assertTrue(view.isMinimized())
             self.assertTrue(view.isVisible())
+
+    def test_compact_edge_and_corner_drags_resize_the_board_instead_of_moving_it(self):
+        view = self.window.codeslayoutview
+        view.setCompactMode(True)
+        changes = []
+        view.compactScaleChanged.connect(changes.append)
+        # Leave enough room to exercise each anchor independently of the
+        # offscreen plugin's much smaller default display.
+        with patch.object(self.app.desktop(), 'availableGeometry', return_value=QRect(0, 0, 2000, 1400)):
+            for edge in ('right', 'left', 'top', 'bottom', 'top_left', 'bottom_right'):
+                with self.subTest(edge=edge):
+                    view.setCompactScale(1.0)
+                    view.move(220, 220)
+                    self.app.processEvents()
+                    viewport = view.scroll_area
+                    keys = view.keystroke_crs_map
+                    def key_center(action):
+                        cap = keys[action]
+                        point = cap.mapTo(view.chart_widget, cap.rect().center())
+                        return viewport.mapFromScene(QPointF(point))
+                    before = QRect(view.geometry())
+                    starts = {
+                        'right': QPoint(view.width() - 3, key_center('ENTER').y()),
+                        'left': QPoint(3, key_center('CAPSLOCK').y()),
+                        'top': QPoint(key_center('F5').x(), 3),
+                        'bottom': QPoint(key_center('RIGHTARROW').x(), view.height() - 3),
+                        'top_left': QPoint(3, 3),
+                        'bottom_right': QPoint(view.width() - 3, view.height() - 3),
+                    }
+                    delta = {'right': QPoint(90, 0), 'left': QPoint(-90, 0),
+                             'top': QPoint(0, -45), 'bottom': QPoint(0, 45),
+                             'top_left': QPoint(-90, -45), 'bottom_right': QPoint(90, 45)}[edge]
+                    target = viewport.viewport()
+                    point = starts[edge]
+                    self.app.sendEvent(target, QMouseEvent(
+                        QEvent.MouseMove, QPointF(point), QPointF(target.mapToGlobal(point)),
+                        Qt.NoButton, Qt.NoButton, Qt.NoModifier))
+                    expected_cursor = (Qt.SizeHorCursor if edge in ('left', 'right') else
+                                       Qt.SizeVerCursor if edge in ('top', 'bottom') else Qt.SizeFDiagCursor)
+                    self.assertEqual(target.cursor().shape(), expected_cursor)
+                    changes.clear()
+                    self.drag_compact_viewport(view, starts[edge], delta)
+                    self.assertEqual(changes, [view.compactScale()])
+                    self.assertGreater(view.width(), before.width())
+                    self.assertGreater(view.height(), before.height())
+                    self.assertGreater(view.compactScale(), 1.0)
+                    after = view.geometry()
+                    if edge in ('right', 'bottom_right'):
+                        self.assertEqual(after.left(), before.left())
+                    if edge in ('left', 'top_left'):
+                        self.assertAlmostEqual(after.right(), before.right(), delta=1)
+                    if edge in ('top', 'top_left'):
+                        self.assertAlmostEqual(after.bottom(), before.bottom(), delta=1)
+                    if edge in ('bottom', 'bottom_right'):
+                        self.assertEqual(after.top(), before.top())
+                    self.assert_compact_board_fits(view)
+
+    def test_compact_inner_key_drag_moves_without_changing_the_chosen_size(self):
+        view = self.window.codeslayoutview
+        view.setCompactMode(True)
+        with patch.object(self.app.desktop(), 'availableGeometry', return_value=QRect(0, 0, 2000, 1400)):
+            view.setCompactScale(1.0)
+            view.move(200, 200)
+            self.app.processEvents()
+            cap = view.keystroke_crs_map['G']
+            center = cap.mapTo(view.chart_widget, cap.rect().center())
+            start = view.scroll_area.mapFromScene(QPointF(center))
+            before = QRect(view.geometry())
+            self.drag_compact_viewport(view, start, QPoint(55, 35))
+            self.assertEqual(view.size(), before.size())
+            self.assertEqual(view.pos(), before.topLeft() + QPoint(55, 35))
+            self.assertEqual(view.compactScale(), 1.0)
+
+    def test_compact_resize_clears_capture_state_if_release_is_lost(self):
+        view = self.window.codeslayoutview
+        view.setCompactMode(True)
+        target = view.scroll_area.viewport()
+        edge = QPoint(target.width() - 3, 20)
+        for kind, button, buttons in (
+                (QEvent.MouseButtonPress, Qt.LeftButton, Qt.LeftButton),
+                (QEvent.MouseMove, Qt.NoButton, Qt.NoButton)):
+            self.app.sendEvent(target, QMouseEvent(
+                kind, QPointF(edge), QPointF(target.mapToGlobal(edge)),
+                button, buttons, Qt.NoModifier))
+        self.assertIsNone(view._resize_origin)
+        before = QRect(view.geometry())
+        self.drag_compact_viewport(view, QPoint(20, 20), QPoint(15, 10))
+        self.assertEqual(view.size(), before.size())
+        self.assertEqual(view.pos(), before.topLeft() + QPoint(15, 10))
+
+    def test_compact_requested_scale_survives_mouse_theme_changes_and_screen_constraints(self):
+        view = self.window.codeslayoutview
+        view.setCompactMode(True)
+        scale_changes = []
+        view.compactScaleChanged.connect(scale_changes.append)
+        with patch.object(self.app.desktop(), 'availableGeometry', return_value=QRect(0, 0, 2200, 1400)):
+            view.setCompactScale(.95)
+            self.app.processEvents()
+            original_size = view.size()
+            for theme in ('light', 'dark'):
+                for show_mouse in (True, False):
+                    view.setMouseVisible(show_mouse)
+                    self.window.themeComboBox.setCurrentIndex(self.window.themeComboBox.findData(theme))
+                    self.app.processEvents()
+                    self.assertEqual(view.compactScale(), .95)
+                    self.assertAlmostEqual(view.scroll_area.transform().m11(), .95, delta=.003)
+                    self.assert_compact_board_fits(view)
+            self.assertEqual(view.size(), original_size)
+            # A smaller monitor temporarily constrains rendering, but must
+            # not overwrite the user's chosen size for the larger monitor.
+            with patch.object(self.app.desktop(), 'availableGeometry', return_value=QRect(50, 40, 420, 260)):
+                view.updateTheme()
+                self.app.processEvents()
+                self.assertEqual(view.compactScale(), .95)
+                self.assertTrue(QRect(50, 40, 420, 260).contains(view.geometry()))
+                self.assertLess(view.scroll_area.transform().m11(), .95)
+                self.assert_compact_board_fits(view)
+            view.updateTheme()
+            self.app.processEvents()
+            self.assertEqual(view.compactScale(), .95)
+            self.assertEqual(view.size(), original_size)
+            self.assertEqual(scale_changes, [.95])
+
+    def test_compact_user_resize_enforces_readability_and_screen_limits(self):
+        view = self.window.codeslayoutview
+        view.setCompactMode(True)
+        with patch.object(self.app.desktop(), 'availableGeometry', return_value=QRect(0, 0, 2000, 1400)):
+            view.setCompactScale(.001)
+            self.app.processEvents()
+            scale = view.scroll_area.transform().m11()
+            source_height = min(label.fontMetrics().height()
+                                for cap in view.crs.values() for label in (cap.character, cap.codeline))
+            self.assertGreaterEqual(source_height * scale, 9 - .03)
+            self.assert_compact_board_fits(view)
+            view.setCompactScale(3.0)
+            self.app.processEvents()
+            self.assertLessEqual(view.compactScale(), 3.0)
+            self.assertTrue(QRect(0, 0, 2000, 1400).contains(view.geometry()))
+            self.assert_compact_board_fits(view)
+
+    def test_compact_zoom_menu_controls_size_and_full_mode_restores_original_geometry(self):
+        view = self.window.codeslayoutview
+        view.setGeometry(30, 40, 720, 460)
+        self.app.processEvents()
+        full_geometry = QRect(view.geometry())
+        view.setCompactMode(True)
+        with patch.object(self.app.desktop(), 'availableGeometry', return_value=QRect(0, 0, 2200, 1400)):
+            view.setCompactScale(1.0)
+            self.app.processEvents()
+            menu = view.createViewMenu()
+            actions = {action.objectName(): action for action in menu.findChildren(morse.QAction)}
+            original_size = view.size()
+            actions['compactZoomIn'].trigger()
+            self.app.processEvents()
+            enlarged_scale = view.compactScale()
+            self.assertGreater(enlarged_scale, 1.0)
+            self.assertGreater(view.width(), original_size.width())
+            actions['compactZoomOut'].trigger()
+            self.app.processEvents()
+            self.assertLess(view.compactScale(), enlarged_scale)
+            view.setCompactScale(1.25)
+            actions['compactZoomReset'].trigger()
+            self.app.processEvents()
+            self.assertEqual(view.compactScale(), 1.0)
+            self.assertEqual(view.size(), original_size)
+            self.assert_compact_board_fits(view)
+            menu.deleteLater()
+        view.setCompactMode(False)
+        self.app.processEvents()
+        self.assertEqual(view.geometry(), full_geometry)
+        self.assertTrue(view.isVisible())
 
     def test_keyboard_and_mouse_execute_without_switching_layout(self):
         listener = self.window.listenerThread

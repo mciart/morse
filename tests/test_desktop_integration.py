@@ -152,6 +152,24 @@ class DesktopIntegrationTests(TestCase):
         self.assertFalse(self.window.guideCompactCheckBox.isChecked())
         self.assertFalse(self.window.configManager.config['guide_compact'])
 
+    def test_compact_resize_is_saved_and_reused_when_input_restarts(self):
+        self.window.goForIt()
+        view = self.window.codeslayoutview
+        self.views.append(view)
+        view.setCompactMode(True)
+        listener = self.window.listenerThread
+        view.setCompactScale(0.9)
+        self.assertEqual(self.window.configManager.config['guide_compact_scale'], 0.9)
+        self.assertIs(self.window.listenerThread, listener)
+        self.assertEqual(self.window.collect_config()['guide_compact_scale'], 0.9)
+        self.window.backToSettings()
+        self.views.remove(view)  # stopIt already scheduled this guide for deletion.
+        self.window.goForIt()
+        restarted = self.window.codeslayoutview
+        self.views.append(restarted)
+        self.assertTrue(restarted.isCompactMode())
+        self.assertEqual(restarted.compactScale(), 0.9)
+
     def test_default_theme_is_system_and_first_launch_does_not_register_startup(self):
         self.assertEqual(morse.DEFAULT_CONFIG['theme'], 'system')
         self.assertEqual(self.window.themeComboBox.currentData(), 'system')

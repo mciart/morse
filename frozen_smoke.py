@@ -2,6 +2,7 @@
 
 import json
 import importlib.util
+from math import ceil
 import sys
 from pathlib import Path
 import traceback
@@ -61,6 +62,39 @@ def verify_interface_features(window):
         metrics = {'size': [view.width(), view.height()],
                    'board': [board.width(), board.height()], 'transparent_gap': True,
                    'painted_key': True, 'hotkey_preset': 'F22'}
+        resize_sizes = []
+        for requested_scale in (0.8, 1.0):
+            if requested_scale == 1.0:
+                view.resetCompactScale()
+                assert view.compactScale() == 1.0, 'Reset did not restore the default compact scale'
+            else:
+                view.setCompactScale(requested_scale)
+            scale = view.compactScale()
+            saved = json.loads(Path(window.configManager.config_file).read_text(encoding='utf-8'))
+            assert saved['guide_compact_scale'] == scale, 'Compact scale was not saved'
+            assert window.config['guide_compact_scale'] == scale
+            image = QImage(view.size(), QImage.Format_ARGB32_Premultiplied)
+            image.fill(Qt.transparent)
+            view.render(image)
+            bounds = view.scroll_area.sceneRect()
+            available = QApplication.desktop().availableGeometry(view)
+            visible_scale = min(scale, available.width() / bounds.width(),
+                                available.height() / bounds.height())
+            assert abs(view.width() - ceil(bounds.width() * visible_scale)) <= 1
+            assert abs(view.height() - ceil(bounds.height() * visible_scale)) <= 1
+            board = view.scroll_area.mapFromScene(bounds).boundingRect()
+            assert abs(board.width() - view.width()) <= 2
+            assert abs(board.height() - view.height()) <= 2
+            assert image.pixelColor(0, 0).alpha() == 0
+            assert not view.isVisible(), 'Resizing must not reveal the hidden guide'
+            resize_sizes.append([view.width(), view.height()])
+            if requested_scale != 1.0:
+                metrics['resized_scale'] = scale
+                view.setCompactMode(False)
+                assert view.geometry() == geometry
+                view.setCompactMode(True)
+                assert view.compactScale() == scale, 'Reopening compact mode lost its scale'
+        metrics.update(resize_sizes=resize_sizes, reset_scale=view.compactScale(), scale_saved=True)
     finally:
         view.setCompactMode(False)
     assert view.geometry() == geometry, 'Full guide geometry was not restored'

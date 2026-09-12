@@ -94,6 +94,15 @@ jobs:
           python -m unittest discover -s tests -v
           if ($LASTEXITCODE -ne 0) { throw '回归测试失败。' }
 
+      - name: 验证 Windows 精简码表实际显示
+        run: |
+          python tools/check_native_guide.py --report build/native-guide.json --allow-unavailable
+          if ($LASTEXITCODE -ne 0) { throw 'Windows 精简码表显示验证失败。' }
+          $report = Get-Content -LiteralPath build/native-guide.json -Raw | ConvertFrom-Json
+          if ($report.status -eq 'unavailable') {
+            Write-Warning "运行器没有可采集的交互桌面，本次未执行屏幕验证：$($report.reason)"
+          }
+
       - name: 构建中文安装包
         run: |
           $buildOptions = @{
@@ -127,11 +136,13 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-      - name: 保存独立程序验收报告
+      - name: 保存程序验收报告
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: frozen-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build/frozen-smoke.json
+          path: |
+            build/frozen-smoke.json
+            build/native-guide.json
           if-no-files-found: ignore
           retention-days: 7

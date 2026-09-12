@@ -19,6 +19,14 @@ py -3 -m venv .venv
 
 码表由 `user_data/layouts.json` 与动作定义生成。修改映射后先执行 `tools/generate_codechart.py`，再检查生成结果。测试使用模拟键鼠和音频，不能替代实际设备延迟或游戏兼容性验证。
 
+在 Windows 桌面上额外检查精简码表的真实显示与缩放：
+
+```powershell
+.\.venv\Scripts\python.exe tools/check_native_guide.py --report build/native-guide.json
+```
+
+此检查会短暂显示测试背景和码表，通过屏幕像素验证顶部切换、边角缩放、移动及隐藏后恢复。它不启动输入监听、不修改个人配置，默认只保存验收报告。CI 在没有可采集桌面时明确记录跳过；窗口消失或 Qt 绘制警告仍会使检查失败。
+
 ## Windows 安装包
 
 ```powershell

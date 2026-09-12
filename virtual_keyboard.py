@@ -1,6 +1,6 @@
 """A single, spatial Morse guide for keyboard and mouse actions."""
 
-from math import ceil
+from math import ceil, isfinite
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QTransform
@@ -405,6 +405,7 @@ class VirtualKeyboardView(QWidget):
     mouseVisibilityChanged = pyqtSignal(bool)
     autoFitChanged = pyqtSignal(bool)
     compactModeChanged = pyqtSignal(bool)
+    compactScaleChanged = pyqtSignal(float)
 
     DISPLAY_NAMES = {
         'ESCAPE': 'Esc', 'TAB': 'Tab', 'TABLEFT': 'Shift+Tab',
@@ -438,6 +439,8 @@ class VirtualKeyboardView(QWidget):
         self._compact_scale = 1.0
         self._full_geometry = None
         self._drag_offset = None
+        self._resize_edges = Qt.Edges()
+        self._resize_origin = None
         self.setWindowTitle('摩斯输入 · 键盘与鼠标')
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint |
@@ -558,6 +561,7 @@ class VirtualKeyboardView(QWidget):
         outer.addWidget(self.input_feedback)
 
         self.scroll_area = GuideViewport()
+        self.scroll_area.viewport().setMouseTracking(True)
         self.scroll_area.viewport().installEventFilter(self)
         self.scroll_area.setContextMenuPolicy(Qt.CustomContextMenu)
         self.scroll_area.customContextMenuRequested.connect(self._showContextMenu)
@@ -746,11 +750,18 @@ class VirtualKeyboardView(QWidget):
         if value == self._compact_mode:
             return
         was_visible, was_minimized = self.isVisible(), self.isMinimized()
+        had_native_window = self.testAttribute(Qt.WA_WState_Created)
         if value:
-            self._compact_scale = self.scroll_area.transform().m11()
+            saved_scale = self.config.get('guide_compact_scale')
+            self._compact_scale = (min(3.0, saved_scale)
+                                   if isinstance(saved_scale, (float, int)) and
+                                   isfinite(saved_scale) and saved_scale > 0 else
+                                   self.scroll_area.transform().m11())
             self._full_geometry = QRect(self.normalGeometry() if self.isMaximized() or was_minimized else self.geometry())
         self._compact_mode = value
         self._drag_offset = None
+        self._resize_edges = Qt.Edges()
+        self._resize_origin = None
         self.compact_checkbox.blockSignals(True)
         self.compact_checkbox.setChecked(value)
         self.compact_checkbox.blockSignals(False)
@@ -763,6 +774,12 @@ class VirtualKeyboardView(QWidget):
         else:
             flags &= ~(Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
         self.setWindowFlags(flags)
+        if had_native_window and QApplication.platformName() == 'windows':
+            # Qt 5 keeps the old framed backing store when toggling translucency
+            # after show. Its dirty rectangle can then exceed the layered HWND,
+            # making UpdateLayeredWindowIndirect fail and the whole guide vanish.
+            # Release native resources only; retain the widget, board and signals.
+            self.destroy()
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, value)
         self.setAttribute(Qt.WA_NoSystemBackground, value)
@@ -796,6 +813,67 @@ class VirtualKeyboardView(QWidget):
                 show_guide_without_activation(self)
         self.compactModeChanged.emit(value)
 
+    def compactScale(self):
+        return self._compact_scale
+
+    def _minimumCompactScale(self):
+        heights = [label.fontMetrics().height() for cap in self.crs.values()
+                   for label in (cap.character, cap.codeline)]
+        return min(1.0, 9.0 / max(1, min(heights, default=9)))
+
+    def setCompactScale(self, scale, *, persist=True):
+        scale = float(scale)
+        if not isfinite(scale) or scale <= 0:
+            raise ValueError('缩放比例必须是正数。')
+        self._compact_scale = max(self._minimumCompactScale(), min(3.0, scale))
+        self.config['guide_compact_scale'] = self._compact_scale
+        self._fitCompactWindow()
+        if persist:
+            self.compactScaleChanged.emit(self._compact_scale)
+
+    def resetCompactScale(self):
+        self.setCompactScale(1.0)
+
+    def _resizeEdges(self, position):
+        bounds = self.scroll_area.viewport().rect()
+        band = 6
+        edges = Qt.Edges()
+        if position.x() <= bounds.left() + band:
+            edges |= Qt.LeftEdge
+        elif position.x() >= bounds.right() - band:
+            edges |= Qt.RightEdge
+        if position.y() <= bounds.top() + band:
+            edges |= Qt.TopEdge
+        elif position.y() >= bounds.bottom() - band:
+            edges |= Qt.BottomEdge
+        return edges
+
+    def _resizeCursor(self, edges):
+        horizontal = bool(edges & (Qt.LeftEdge | Qt.RightEdge))
+        vertical = bool(edges & (Qt.TopEdge | Qt.BottomEdge))
+        if horizontal and vertical:
+            return (Qt.SizeFDiagCursor if bool(edges & Qt.LeftEdge) == bool(edges & Qt.TopEdge)
+                    else Qt.SizeBDiagCursor)
+        return Qt.SizeHorCursor if horizontal else Qt.SizeVerCursor if vertical else Qt.SizeAllCursor
+
+    def _resizeFromPointer(self, position):
+        origin, pointer = self._resize_origin
+        edges = self._resize_edges
+        delta = position - pointer
+        width_delta = (-delta.x() if edges & Qt.LeftEdge else delta.x())
+        height_delta = (-delta.y() if edges & Qt.TopEdge else delta.y())
+        width_from_height = height_delta * origin.width() / max(1, origin.height())
+        if not edges & (Qt.LeftEdge | Qt.RightEdge):
+            width_delta = width_from_height
+        elif edges & (Qt.TopEdge | Qt.BottomEdge) and abs(width_from_height) > abs(width_delta):
+            width_delta = width_from_height
+        bounds = self.scroll_area.sceneRect()
+        scale = max(0.001, (origin.width() + width_delta) / max(1, bounds.width()))
+        self.setCompactScale(scale, persist=False)
+        x = origin.right() + 1 - self.width() if edges & Qt.LeftEdge else origin.x()
+        y = origin.bottom() + 1 - self.height() if edges & Qt.TopEdge else origin.y()
+        self._moveInsideScreen(QPoint(x, y), QApplication.desktop().availableGeometry(self))
+
     def _fitCompactWindow(self):
         """Make the actual top-level rectangle match the complete board."""
         if not self._compact_mode:
@@ -824,14 +902,33 @@ class VirtualKeyboardView(QWidget):
     def eventFilter(self, watched, event):
         if self._compact_mode and watched is self.scroll_area.viewport():
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                self._drag_offset = event.globalPos() - self.pos()
+                self._resize_edges = self._resizeEdges(event.pos())
+                if self._resize_edges:
+                    self._resize_origin = (QRect(self.geometry()), event.globalPos())
+                else:
+                    self._drag_offset = event.globalPos() - self.pos()
                 return True
-            if event.type() == QEvent.MouseMove and self._drag_offset is not None:
+            if event.type() == QEvent.MouseMove:
                 if event.buttons() & Qt.LeftButton:
-                    self._moveInsideScreen(event.globalPos() - self._drag_offset)
-                    return True
+                    if self._resize_origin is not None:
+                        self._resizeFromPointer(event.globalPos())
+                        return True
+                    if self._drag_offset is not None:
+                        self._moveInsideScreen(event.globalPos() - self._drag_offset)
+                        return True
+                if self._resize_origin is not None:
+                    self.compactScaleChanged.emit(self._compact_scale)
+                self._resize_origin = None
+                self._resize_edges = Qt.Edges()
                 self._drag_offset = None
+                watched.setCursor(self._resizeCursor(self._resizeEdges(event.pos())))
+                return True  # Keep QGraphicsView from replacing the resize cursor.
             if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                if self._resize_origin is not None:
+                    self._resizeFromPointer(event.globalPos())
+                    self.compactScaleChanged.emit(self._compact_scale)
+                self._resize_origin = None
+                self._resize_edges = Qt.Edges()
                 self._drag_offset = None
                 return True
         return super().eventFilter(watched, event)
@@ -842,6 +939,15 @@ class VirtualKeyboardView(QWidget):
         display_action = menu.addAction('完整显示' if self._compact_mode else '精简显示')
         target_mode = not self._compact_mode
         display_action.triggered.connect(lambda checked=False: self.setCompactMode(target_mode))
+        if self._compact_mode:
+            zoom = menu.addMenu('调整大小')
+            for text, name, callback in (
+                    ('放大', 'compactZoomIn', lambda: self.setCompactScale(self.compactScale() * 1.15)),
+                    ('缩小', 'compactZoomOut', lambda: self.setCompactScale(self.compactScale() / 1.15)),
+                    ('默认大小', 'compactZoomReset', self.resetCompactScale)):
+                action = zoom.addAction(text)
+                action.setObjectName(name)
+                action.triggered.connect(callback)
         mouse_action = menu.addAction('显示鼠标')
         mouse_action.setCheckable(True)
         mouse_action.setChecked(self._mouse_visible)
