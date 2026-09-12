@@ -28,8 +28,9 @@ import mouse
 import pressagio.callback
 import pressagio
 import icons_rc
-from ui_theme import apply_dark_theme, THEME_COLORS
+from ui_theme import ThemeManager, THEME_COLORS
 from keyboard_output import KeyboardOutput
+from virtual_keyboard import VirtualKeyboardView
 
 def get_user_data_dir(app_name="MorseWriter"):
     """
@@ -65,6 +66,8 @@ typestate = None
 
 # If configfile file is lost.. 
 DEFAULT_CONFIG = {
+  "theme": "system",
+  "guide_layout": "desktop",
   "keylen": 1,
   "keyone": "SPACE",
   "keytwo": "ENTER",
@@ -336,7 +339,7 @@ class ConfigManager:
                     data = json.load(file)
                     # self.update_keystrokes(data) # Note:cause issue to save configuration
                     self.convert_types(data)
-                    return data
+                    return dict(self.default_config, **data)
             except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
                 logging.warning(f"Error loading configuration: {e}")
         config = self.default_config.copy()
@@ -361,6 +364,7 @@ class ConfigManager:
         try:
             with open(self.config_file, "w") as file:
                 json.dump(config, file, indent=4)   # self.config
+            self.config = dict(config)
         except Exception as e:
             logging.warning(f"Error saving configuration: {e}")
 
@@ -869,6 +873,9 @@ class Window(QDialog):
         self.repeaton = False
 
         self.audioSelector = AudioDeviceSelector()
+        app = QApplication.instance()
+        app.theme_manager.set_mode(self.config.get('theme', 'system'))
+        app.theme_manager.themeChanged.connect(self.refreshTheme)
 
     def load_default_config(self):
         return DEFAULT_CONFIG.copy()
@@ -880,7 +887,10 @@ class Window(QDialog):
         self.repeaton = False
 
         logging.debug("[Window init] Setting active layout to: %s", self.layoutManager.main_layout_name)
-        self.layoutManager.set_active(self.layoutManager.main_layout_name)
+        preferred = self.config.get('guide_layout', self.layoutManager.main_layout_name)
+        if preferred not in self.layoutManager.layouts:
+            preferred = self.layoutManager.main_layout_name
+        self.layoutManager.set_active(preferred)
         logging.debug("[Window init] Active layout successfully set to: %s", self.layoutManager.active_layout_name)
         # Check for specific layout types that may require special handling
         if self.layoutManager.get_active_layout().get('supports_prediction', False):
@@ -975,13 +985,27 @@ class Window(QDialog):
         self.showCodeView()
 
     def showCodeView(self):
-        view = CodesLayoutViewWidget(self.layoutManager.get_active_layout(), self.config)
+        view_class = VirtualKeyboardView if self.layoutManager.active_layout_name == 'desktop' else CodesLayoutViewWidget
+        view = view_class(self.layoutManager.get_active_layout(), self.config)
         self.codeslayoutview = view
         view.setAvailableLayouts(self.layoutManager.layouts, self.layoutManager.active_layout_name)
         view.changeLayoutSignal.connect(self.changeLayout)
         view.settingsRequested.connect(self.backToSettings)
         self.updateOutputState()
         view.show()
+
+    def refreshTheme(self, _resolved=None):
+        if self.codeslayoutview is not None:
+            if hasattr(self.codeslayoutview, 'updateTheme'):
+                self.codeslayoutview.updateTheme()
+            self.updateOutputState()
+
+    def changeTheme(self):
+        mode = self.themeComboBox.currentData()
+        self.config['theme'] = mode
+        self.configManager.config['theme'] = mode
+        QApplication.instance().theme_manager.set_mode(mode)
+        self.configManager.save_config(self.configManager.config)
 
     def updateOutputState(self):
         if self.codeslayoutview is not None:
@@ -1022,6 +1046,8 @@ class Window(QDialog):
 
     def collect_config(self):
         config = {
+            'theme': self.themeComboBox.currentData(),
+            'guide_layout': self.guideLayoutComboBox.currentData(),
             'keylen': self.keySelectionRadioOneKey.isChecked() and 1 or self.keySelectionRadioTwoKey.isChecked() and 2 or 3,
             'keyone': self.iconComboBoxKeyOne.itemData(self.iconComboBoxKeyOne.currentIndex()),
             'keytwo': self.iconComboBoxKeyTwo.itemData(self.iconComboBoxKeyTwo.currentIndex()),
@@ -1199,6 +1225,26 @@ class Window(QDialog):
         viewSettingSec.addWidget(self.upperCharsCheck, 0, 3)
         viewSettingSec.setRowStretch(4, 1)
         inputSettingsLayout.addLayout(viewSettingSec)
+
+        appearance = QGridLayout()
+        appearance.addWidget(QLabel('界面主题：'), 0, 0)
+        self.themeComboBox = QComboBox()
+        for label, mode in (('跟随系统', 'system'), ('浅色', 'light'), ('深色', 'dark')):
+            self.themeComboBox.addItem(label, mode)
+        self.themeComboBox.setCurrentIndex(max(0, self.themeComboBox.findData(self.config.get('theme', 'system'))))
+        self.themeComboBox.currentIndexChanged.connect(self.changeTheme)
+        appearance.addWidget(self.themeComboBox, 0, 1)
+        appearance.addWidget(QLabel('输入面板：'), 1, 0)
+        self.guideLayoutComboBox = QComboBox()
+        names = {'desktop': '键盘与鼠标（统一面板）', 'main': '兼容 · 主键盘',
+                 'typing': '兼容 · 字母与候选', 'mouse': '兼容 · 鼠标短码', 'number': '兼容 · 数字短码'}
+        for name in ('desktop', 'main', 'typing', 'mouse', 'number'):
+            if name in self.layoutManager.layouts:
+                self.guideLayoutComboBox.addItem(names[name], name)
+        self.guideLayoutComboBox.setCurrentIndex(max(0, self.guideLayoutComboBox.findData(self.config.get('guide_layout', 'desktop'))))
+        self.guideLayoutComboBox.setToolTip('统一面板中可直接输入键盘与鼠标编码；兼容选项保留旧版短码。')
+        appearance.addWidget(self.guideLayoutComboBox, 1, 1)
+        inputSettingsLayout.addLayout(appearance)
 
         self.iconComboBoxSoundDit = self.mkKeyStrokeComboBox([
                 ["点音", "res/dit_sound.wav"],  # Ensure the path is correct
@@ -1661,7 +1707,7 @@ class CodesLayoutViewWidget(QWidget):
         self.escapeMorseModeListener = KeyCombinationListener()
 
     def setAvailableLayouts(self, layouts, active):
-        names = {'main': '主键盘（完整）', 'typing': '字母与候选', 'mouse': '鼠标', 'number': '数字（短码）'}
+        names = {'desktop': '键盘与鼠标', 'main': '主键盘（完整）', 'typing': '字母与候选', 'mouse': '鼠标', 'number': '数字（短码）'}
         self.layout_selector.blockSignals(True)
         self.layout_selector.clear()
         for key in layouts:
@@ -1815,7 +1861,7 @@ class CustomApplication(QApplication):
         self.qt_translator = ChineseUiTranslator(self)
         self.qt_translator.load("qt_zh_CN", QLibraryInfo.location(QLibraryInfo.TranslationsPath))
         self.installTranslator(self.qt_translator)
-        apply_dark_theme(self)
+        self.theme_manager = ThemeManager(self)
 
     def notify(self, receiver, event):
         #logging.debug(f"Event: {event.type()}, Receiver: {receiver.__class__.__name__}")

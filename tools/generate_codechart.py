@@ -47,7 +47,7 @@ def render_chart(layout_data, key_data):
         raise ValueError("默认码表不存在")
 
     # Page names also come from the runtime layout navigation labels.
-    page_names = {}
+    page_names = {name: layout['display_name'] for name, layout in layouts.items() if layout.get('display_name')}
     for layout in layouts.values():
         for item in layout["items"]:
             if item.get("action") == "CHANGELAYOUT":
@@ -63,13 +63,14 @@ def render_chart(layout_data, key_data):
         "编码和页面来自 [软件码表配置](user_data/layouts.json)，动作名称来自 "
         "[软件动作定义](MorseCodeGUI.py)。此表包含所有页面的可用编码。",
         "",
-        "`•` 表示点，`—` 表示划。编码按当前页面解释；切换页面后，同一编码可能执行不同动作。"
+        "`•` 表示点，`—` 表示划。统一面板中的编码互不冲突，可直接执行键盘与鼠标操作。"
         "标点和控制键使用本软件约定的编码。",
         "",
-        f"默认显示“{page_names.get(default_layout, default_layout)}”完整页面。"
-        "可在码表窗口的页面选择器中切页，也可输入各页列出的切换编码。"
-        "字母页的候选项会根据输入动态更新，仅有候选词时可用。"
-        "缩写仅在字母页输入空格完成单词后展开；主键盘和数字页保持原字符输出。",
+        f"默认显示“{page_names.get(default_layout, default_layout)}”统一面板，按实体键盘与鼠标的位置排列。"
+        "键盘沿用原编码，鼠标与候选项采用独立七位码，无需切页。"
+        "设置中的兼容面板保留旧版四页编码；兼容页中的相同编码可能执行不同动作。"
+        "候选项会根据输入动态更新，仅有候选词时可用。"
+        "缩写仅在兼容字母页输入空格完成单词后展开。",
         "",
         "组合键：先输入 Ctrl，再输入 V，即执行一次 Ctrl+V，随后自动释放 Ctrl。"
         "需要连续组合键时，先开启“修饰键锁定”，再输入 Ctrl 和 V；"

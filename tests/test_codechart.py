@@ -21,8 +21,8 @@ class CodeChartTests(unittest.TestCase):
     def test_committed_chart_matches_all_runtime_pages(self):
         expected = render_chart(self.layouts, self.key_data)
         self.assertEqual((PROJECT / "codechart.md").read_text(encoding="utf-8"), expected)
-        self.assertIn("## 主键盘（默认）", expected)
-        for page in ("字母", "鼠标", "数字"):
+        self.assertIn("## 键盘与鼠标（默认）", expected)
+        for page in ("主键盘", "字母", "鼠标", "数字"):
             self.assertIn(f"## {page}\n", expected)
         for number in range(1, 9):
             self.assertIn(f"| 候选{number} |", expected)

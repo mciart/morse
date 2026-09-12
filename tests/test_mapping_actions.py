@@ -58,7 +58,7 @@ class MappingActionTests(unittest.TestCase):
         temporary = self.enterContext(TemporaryDirectory())
         config_path = Path(temporary) / "config.json"
         config_path.write_text(json.dumps(dict(
-            morse.DEFAULT_CONFIG, keylen=3, withsound=False,
+            morse.DEFAULT_CONFIG, keylen=3, withsound=False, guide_layout='main',
             minLetterPause=60000, fastMorseMode=False,
         )), encoding="utf-8")
 

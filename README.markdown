@@ -1,122 +1,98 @@
-MorseWriter
------------
+# 摩斯输入（MorseWriter）
 
-<p align="center">
-  <img src="https://github.com/willwade/MorseWriter/raw/main/res/MorseWriterLogo.jpeg" height="128" width="128"  />
-  <img src="https://github.com/willwade/MorseWriter/raw/main/screenshot1.png" height="111" width="194" />
-  <img src="https://github.com/willwade/MorseWriter/raw/main/screenshot2.png" height="106" width="131" />
-</p>
+用一到三个按键输入摩斯码，完成文字输入、键盘快捷键和鼠标操作。本项目基于 [MorseWriter](https://github.com/willwade/MorseWriter) 改进，提供简体中文界面，主要面向 Windows。
 
+[完整码表](codechart.md) · [问题反馈](https://github.com/mciart/morse/issues)
 
-This is a small system tray app designed in Python to interpret one or two key presses pressed in a set way (morse) and convert them to the key equivalent. This should mean that a user who has good timing can access the entire computer to write and control their machine - potentially with one or two keys or switches. Mouse implementation is flaky right now.  
+## 功能
 
-For code, bug tracking and feature requests see [https://github.com/willwade/MorseWriter/](https://github.com/willwade/MorseWriter/)
+- 统一的虚拟键盘与鼠标引导：按键按常见键盘位置排列，功能键、导航键、符号和鼠标操作同时可见，日常使用无需切页。
+- 默认跟随系统切换深色与浅色外观，也可在设置中固定为“浅色”或“深色”。主题选择立即应用并保存。
+- 支持单键、双键、三键输入，可调整点划时长、字符间隔、字号和提示音。
+- 支持单次组合键、修饰键锁定，以及鼠标移动、点击、双击和拖动。
+- 点击窗口的 × 会最小化并继续输入；通过系统托盘暂停、恢复或退出。
 
-**Requirements**
+中文适配指软件界面；当前不提供中文摩斯编码或中文输入法。
 
-Pretty multiplatform. Well should be..although hideous problem on MacOS. 
+## 快速开始
 
-**Install with virtualenv (windows)**
+安装 Python 3 和 Git，在 PowerShell 中执行：
 
-```bash
-# tested on py 3.11.4
-pip install -r requirements.txt
-python MorseCodeGUI.py
+```powershell
+git clone https://github.com/mciart/morse.git
+cd morse
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe MorseCodeGUI.py
 ```
 
-**Make executable with pyinstaller**
+已克隆项目时，从项目目录内创建虚拟环境即可。后续启动只需执行最后一行命令。
 
-```bash
-pip install pyinstaller
-pyinstaller MorseCodeGUI.spec
+1. 打开要输入的应用，首次练习建议使用记事本。
+2. 在软件中选择按键数量及对应输入键，按需要调整时长、提示音和主题。
+3. 点击“开始输入”，将焦点切回目标应用，再输入摩斯码。
+4. 先练习 `E（•）` 和 `T（—）`，再参照面板输入其他按键。
+
+只有当前模式选定的输入键用于摩斯输入；其他按键和数字小键盘可照常使用。选择 `1`、`2` 时，对应字母上方的数字键。
+
+## 使用说明
+
+### 输入模式
+
+`•` 表示点，`—` 表示划。
+
+| 模式 | 点与划 | 完成一个字符 |
+| --- | --- | --- |
+| 单键 | 短按输入点，长按输入划，以“点划分界时长”为界 | 松开后等待“字符间隔” |
+| 双键 | 第一个键输入点，第二个键输入划 | 松开后等待“字符间隔” |
+| 三键 | 第一个键输入点，第二个键输入划 | 按第三个键立即完成 |
+
+### 键盘与鼠标引导
+
+默认面板按键盘和鼠标布局展示编码，输入过程中会提示仍可匹配的动作。键盘沿用原有编码；鼠标操作及候选选择采用独立的七位编码，与键盘编码共用一个面板。
+
+习惯旧编码时，可在设置的“输入面板”选项中选择兼容主键盘、字母与候选、鼠标短码或数字短码，再开始输入。旧页面中的相同编码可能表示不同动作，请以所选码表为准。全部编码均可在 [完整码表](codechart.md) 中查询。
+
+统一面板支持候选词选择，直接按键保持原字符输出。自动缩写仅在兼容的“字母与候选”页面中生效：输入空格完成单词后展开。
+
+### 组合键
+
+- 单次操作：先输入 `Ctrl`，再输入 `V`，执行一次 `Ctrl+V` 后自动释放 `Ctrl`。`Shift`、`Alt` 和 `Windows` 键的用法相同。
+- 连续操作：先开启“修饰键锁定”，再输入 `Ctrl` 和其他按键；再次输入“修饰键锁定”会关闭锁定并释放修饰键。它不会自动重复上一项操作。
+- “左向 Tab”执行 `Shift+Tab`；“开始菜单”打开系统开始菜单；“应用菜单”打开当前项目的上下文菜单。
+
+### 窗口与托盘
+
+- 点击 ×：最小化窗口，继续接收摩斯输入。
+- 点击托盘图标或选择“显示窗口”：恢复窗口。
+- “暂停输入”与“继续输入”：停用或恢复摩斯输入；暂停时释放程序按住的修饰键。
+- “打开设置”或面板上的“返回设置”：停止输入并修改配置。码表窗口获得焦点时也可按 `Ctrl+Shift+P` 返回设置。
+- “退出”：关闭程序并释放键盘监听及修饰键。
+
+## 开发
+
+软件引导与文档共用 `user_data/layouts.json` 中的编码。修改映射后生成文档，并运行检查与测试：
+
+```powershell
+.\.venv\Scripts\python.exe tools/generate_codechart.py
+.\.venv\Scripts\python.exe tools/generate_codechart.py --check
+$env:QT_QPA_PLATFORM = "offscreen"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+Remove-Item Env:QT_QPA_PLATFORM
 ```
 
-**使用说明**
+测试通过模拟键盘和鼠标输出验证行为，界面测试使用离屏模式。实际输入体验仍需在目标应用中验证。
 
-本分支使用简体中文界面和默认深色主题。
+打包 Windows 程序：
 
-* 选择单键、双键或三键模式，再点击“开始输入”。双键模式的第一个键输入点，第二个键输入划；三键模式额外使用第三个键结束当前字符。
-* 只有当前模式选定的输入键用于摩斯输入，其他按键和数字小键盘仍可正常使用。
-* 设置窗口和码表窗口点击 × 后最小化，正在进行的摩斯输入会继续运行。
-* 点击系统托盘图标或选择“显示窗口”可恢复窗口。
-* 托盘菜单中的“暂停输入”恢复普通键盘输入，“继续输入”重新启用摩斯输入。“打开设置”会停止输入并返回设置窗口。
-* 需要关闭程序时，在托盘菜单中选择“退出”，程序会释放键盘监听。
-* 码表窗口获得焦点时，Ctrl+Shift+P 可返回设置。
-* 码表默认打开完整的“主键盘”页，包含字母、数字、标点、F1–F12、方向键及控制键；可使用页面选择器或切页编码进入“字母”“鼠标”“数字”页。相同编码在不同页面可能表示不同动作，请按当前页面的引导输入。
-* 单次组合键：先输入 Ctrl，再输入 V，执行一次 Ctrl+V 后自动释放 Ctrl；Shift、Alt 和 Windows 键同样可与后续按键组合。
-* 缩写仅在字母与候选页输入空格完成单词后展开；主键盘和数字页保持原字符输出。候选词和缩写保留原有大小写。
-* 连续组合键：先输入“修饰键锁定”，再输入 Ctrl 和 V，可保持 Ctrl 继续操作；再次输入“修饰键锁定”会关闭锁定并释放修饰键。该开关不自动重复上一个动作。
-* “左向Tab”执行 Shift+Tab；“开始菜单”打开开始菜单，“应用菜单”打开当前项目的上下文菜单。
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller --clean MorseCodeGUI.spec
+```
 
-**Tips for first use**
+构建结果位于 `dist` 目录。问题反馈和改进建议请提交到 [本仓库](https://github.com/mciart/morse)。
 
-* 使用 [完整码表](codechart.md) 或软件内的码表引导查看当前页面的编码。
-* Use notepad to test your typing skills
-* To get used to typing you have to first get used to the speed of things. Just try a e and a t for starters. 
-* Getting auditory feedback on the key entered may be useful. In this case you may find [this additional program](https://github.com/willwade/Scripting-Recipes-for-AT/tree/master/Autohotkey/SoundingKeyboardMouse#keyboard-sounder) of use. 
+## 许可证与致谢
 
-**Issues:**
+本项目采用 [MIT 许可证](LICENSE)，允许使用、修改与分发，需保留原版权及许可声明。
 
-* Debug window needs to be minimised even if debug switched off
-* 1 & 2 input keys relate to the keys above the letters on the keyboard - not a numeric keypad
-
-**Tips for Building yourself**
-
-You will need Python 2.6 or earlier for [pyinstaller](http://www.pyinstaller.org/). You will also need to install some extra libraries - notably [PyHook](http://sourceforge.net/projects/uncassist/), [PyWin32](http://sourceforge.net/projects/pywin32/) and [PyQt](http://www.riverbankcomputing.com/software/pyqt/intro)
-
-    python Configure.py
-    python Makespec.py --onefile path_to_your_morsecodegui.py 
-    python Build.py path_to_the_Morsecodegui.spec
-
-**Getting Involved**
-
-In order to start contributing code to the project, follow the steps below:
-
-1. Fork this repo. For detailed instructions visit [http://help.github.com/fork-a-repo/](http://help.github.com/fork-a-repo/)
-2. Hack away! but please make sure you follow [this branching model] (http://nvie.com/posts/a-successful-git-branching-model/). That means, make your pull requests against the **develop** branch, not the **master** branch. 
-
-**Research**
-
-For further research and reading material on the use of Morse in assistive technology see [http://www.citeulike.org/user/willwade/tag/morse](http://www.citeulike.org/user/willwade/tag/morse) as a starting point
-
-**Credits**
-
-* DavidDW for coding geniusness
-* [Darci USB for code conversion](http://www.westest.com/darci/index.html) 
-* Andy/Lisa/[ACE North](http://www.ace-north.org.uk/) for original thoughts 
-* [Jim Lubin and others](http://www.makoa.org/jlubin/morsecode.htm)
-* [The Noun Project](http://thenounproject.com/) for the icon 
-
-Please contact me if you intend to fork this or do anything fun with it - will AT e-wade.net   
-
-Enjoy!
-
-**完整摩斯码表**
-
-[查看与软件同步的中文完整码表](codechart.md)。码表从软件实际使用的配置和动作名称自动生成，覆盖主键盘、字母、鼠标、数字四个页面。
-
-维护时执行 `python tools/generate_codechart.py` 更新码表，执行 `python tools/generate_codechart.py --check` 检查是否与软件一致。
-
-## License
-
-MorseWriter is licensed under the MIT License:
-
-  Copyright (c) 2024 Will Wade (http://acecentre.org.uk/)
-
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files (the "Software"), to deal
-  in the Software without restriction, including without limitation the rights
-  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-  copies of the Software, and to permit persons to whom the Software is
-  furnished to do so, subject to the following conditions:
-
-  The above copyright notice and this permission notice shall be included in
-  all copies or substantial portions of the Software.
-
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-  THE SOFTWARE.
+感谢原作者 Will Wade、DavidDW，提供早期构想的 Andy、Lisa 与 ACE North，以及 Darci USB、Jim Lubin 等人的摩斯输入工作；图标来源于 The Noun Project。
