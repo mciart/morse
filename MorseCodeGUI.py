@@ -250,9 +250,9 @@ class ConfigManager:
         "SHIFT": {'label': 'shift', 'key_code': 'shift', 'character': None, 'arg': None},
         "RSHIFT": {'label': 'rshift', 'key_code': 'right shift', 'character': None, 'arg': None},
         "LSHIFT": {'label': 'lshift', 'key_code': 'left shift', 'character': None, 'arg': None},
-        "CTRL": {'label': 'ctrl', 'key_code': 'trl', 'character': None, 'arg': None},
+        "CTRL": {'label': 'ctrl', 'key_code': 'ctrl', 'character': None, 'arg': None},
         "RCTRL": {'label': 'rctrl', 'key_code': 'right ctrl', 'character': None, 'arg': None},
-        "LCTRL": {'label': 'lctrl', 'key_code': 'ctrl', 'character': None, 'arg': None},
+        "LCTRL": {'label': 'lctrl', 'key_code': 'left ctrl', 'character': None, 'arg': None},
         "ALT": {'label': 'alt', 'key_code': 'alt', 'character': None, 'arg': None},
         "INSERT": {'label': 'insert', 'key_code': 'insert', 'character': None, 'arg': None},
         "WINDOWS": {'label': 'win', 'key_code': 'cmd', 'character': None, 'arg': None},
@@ -476,35 +476,45 @@ class KeyListenerThread(QThread):
             allowed_keys = ['shift', 'ctrl', 'alt', 'cmd']
             self.configured_keys = [key for key in self.configured_keys if key in allowed_keys]
 
-        # Setup key hooks once, outside the loop
-        for key in self.configured_keys:
-            keyboard.on_press_key(key, self.on_press, suppress=True)
-            keyboard.on_release_key(key, self.on_release, suppress=True)
-
-        # Minimal loop to keep the thread alive
-        while self.keep_running:
-            time.sleep(0.1)  # Small sleep to avoid CPU overload
-
-    def on_press(self, event):
-        logging.debug(f"[KeyListenerThread] on_press: {event.name}")
+        unhooks = []
         try:
-            role = self.configured_keys.index(event.name)
-            self.keyEvent.emit(event.name, True, role)
-        except Exception as e:
-            logging.warning(f"[KeyListenerThread] Error handling on_press key event: {e}")
+            for role, key in enumerate(self.configured_keys):
+                # Bind the role to the hook: event names can change with Shift
+                # or use a different alias (e.g. "shift" vs "left shift").
+                callback = lambda event, key=key, role=role: self.on_key_event(event, key, role)
+                unhooks.append(keyboard.hook_key(key, callback, suppress=True))
 
-    def on_release(self, event):
-        logging.debug(f"[KeyListenerThread] on_release: {event.name}")
+            while self.keep_running:
+                time.sleep(0.1)
+        finally:
+            # Clean up even if startup fails or stop() races with registration.
+            for unhook in reversed(unhooks):
+                unhook()
+
+    def on_key_event(self, event, key, role):
+        if not self.keep_running:
+            return True
+        # keyboard.hook_key also matches keypad scan codes and, on Windows,
+        # both Ctrl keys. Preserve keys outside the selected physical input.
+        if event.is_keypad:
+            return True
+        sided_names = {
+            'left ctrl': ('left ctrl', 'ctrl'),
+            'right ctrl': ('right ctrl',),
+            'left shift': ('left shift', 'shift'),
+            'right shift': ('right shift',),
+        }
+        if key in sided_names and event.name not in sided_names[key]:
+            return True
         try:
-            role = self.configured_keys.index(event.name)
-            self.keyEvent.emit(event.name, False, role)
+            self.keyEvent.emit(key, event.event_type == keyboard.KEY_DOWN, role)
         except Exception as e:
-            logging.warning(f"[KeyListenerThread] Error handling on_release key event: {e}")
+            logging.warning(f"[KeyListenerThread] Error handling key event: {e}")
+            return True
+        return False  # Only the active Morse input keys are consumed.
 
     def stop(self):
         self.keep_running = False  # Signal the loop to stop
-        keyboard.unhook_all()  # Unhook all keys
-        self.quit()  # Quit the thread's event loop if necessary
         self.wait()  # Wait for the thread to finish
 
 
@@ -900,9 +910,10 @@ class Window(QDialog):
 
     def get_configured_keys(self):
         key_codes = []
-        default_keys = {'keyone': 'SPACE', 'keytwo': 'ENTER', 'keythree': 'RIGHT CTRL'}
+        default_keys = {'keyone': 'SPACE', 'keytwo': 'ENTER', 'keythree': 'RCTRL'}
+        key_count = int(self.config.get('keylen', 1))
 
-        for key in ['keyone', 'keytwo', 'keythree']:
+        for key in ['keyone', 'keytwo', 'keythree'][:key_count]:
             config_key = self.config.get(key, default_keys[key])
             try:
                 # Ensure keys are fetched in uppercase, which seems to be the format used in keystrokemap
@@ -918,6 +929,8 @@ class Window(QDialog):
 
 
     def startKeyListener(self):
+        if self.config.get('off', False):
+            return
         key_codes = self.get_configured_keys()
         logging.debug(f"[Window startKeyListener] Configured keys: {key_codes}")
         if not self.listenerThread:
@@ -1234,17 +1247,32 @@ class Window(QDialog):
         self.audioSelector.show()
 
     def toggleOnOff(self):
+        if self.codeslayoutview is None:
+            return
+        self.config['off'] = not self.config.get('off', False)
         if self.config['off']:
-            self.config['off'] = False
+            self.stopKeyListener()
         else:
-            self.config['off'] = True
+            self.startKeyListener()
+
+    def stopKeyListener(self):
+        if self.listenerThread is not None:
+            self.listenerThread.stop()
+            self.listenerThread = None
+        for name in ('endCharacterTimer', 'fast_morse_mode_timer', 'repeat_character_timer'):
+            timer = getattr(self, name)
+            if timer is not None:
+                timer.stop()
+                setattr(self, name, None)
+        self.currentCharacter = []
+        self.lastKeyDownTime = None
+        self.repeaton = False
+        if self.codeslayoutview is not None:
+            self.codeslayoutview.reset()
 
     def stopIt(self):
         logging.debug("Stopping components...")
-        if self.listenerThread is not None:
-            self.listenerThread.stop()
-            self.listenerThread.wait()
-            self.listenerThread = None
+        self.stopKeyListener()
         if self.codeslayoutview is not None:
             self.codeslayoutview.hide()
             self.codeslayoutview = None
@@ -1260,7 +1288,7 @@ class Window(QDialog):
     def createActions(self):
         self.onOffAction = QAction("OnOff", self, triggered=self.toggleOnOff)
         self.onOpenSettingsAction = QAction("Open Settings", self, triggered=self.onOpenSettings)
-        self.quitAction = QAction("Quit", self, triggered=sys.exit)
+        self.quitAction = QAction("Quit", self, triggered=self.close)
 
     def createTrayIcon(self):
         self.trayIconMenu = QMenu(self)
@@ -1273,6 +1301,8 @@ class Window(QDialog):
         self.trayIcon.setContextMenu(self.trayIconMenu)
 
     def handle_key_event(self, key, is_press, role):
+        if self.listenerThread is None or self.config.get('off', False):
+            return  # Ignore queued events after pausing or returning to settings.
         # logging.debug(f"[handle_key_event] t={key}, Pressed={is_press}")
         try:
             if is_press:

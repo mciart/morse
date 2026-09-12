@@ -41,8 +41,9 @@ pyinstaller MorseCodeGUI.spec
 *   Press go
 *   Minimise the coding window if needed
 *   Minimise the black debug window. NB: If you close it you are closing the app. 
-*   Note that all normal key entry is now disabled. To halt the script use a mouse to navigate to the system tray icon and quit the app
-*   If you want to escape morse entry : ctrl+shift+p will pause it. 
+* Only the input keys enabled for the selected One/Two/Three Key mode are reserved for Morse entry. Other keys, including the numeric keypad, remain available for normal typing.
+* Choose **OnOff** in the system tray menu to pause Morse entry and restore normal keyboard input; choose it again to resume. **Open Settings** stops Morse entry, and **Quit** closes the app.
+* With the coding window focused, **Ctrl+Shift+P** returns to settings.
 
 **Tips for first use**
 
