@@ -37,6 +37,9 @@ def windows_api():
         ('GetWindowThreadProcessId', [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
         ('IsWindowVisible', [wintypes.HWND], wintypes.BOOL),
         ('IsIconic', [wintypes.HWND], wintypes.BOOL),
+        ('GetDpiForWindow', [wintypes.HWND], wintypes.UINT),
+        ('GetThreadDpiAwarenessContext', [], wintypes.HANDLE),
+        ('GetAwarenessFromDpiAwarenessContext', [wintypes.HANDLE], ctypes.c_int),
     )
     for name, arguments, result in signatures:
         function = getattr(api, name)
@@ -59,7 +62,7 @@ def check_native(report, save_images=False):
     from PyQt5 import sip
     from PyQt5.QtCore import (Qt, QEvent, QEventLoop, QPoint, QPointF, QTimer,
                              QtWarningMsg, QtCriticalMsg, QtFatalMsg, qInstallMessageHandler)
-    from PyQt5.QtGui import QMouseEvent
+    from PyQt5.QtGui import QFont, QFontMetrics, QMouseEvent
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication, QWidget
     from tools.generate_codechart import read_key_data
@@ -73,7 +76,8 @@ def check_native(report, save_images=False):
         if kind in (QtWarningMsg, QtCriticalMsg, QtFatalMsg) else None)
     app = backdrop = view = None
     result = dict(status='failed', skipped=False, baseline_established=False,
-                  stages=stages, qt_warnings=warnings)
+                  stages=stages, qt_warnings=warnings,
+                  display_change_test='simulated font metrics and Qt screen signals; real desktop pixel sampling')
 
     def flush():
         loop = QEventLoop()
@@ -152,6 +156,35 @@ def check_native(report, save_images=False):
             app.sendEvent(viewport, QMouseEvent(kind, QPointF(start + offset),
                           QPointF(global_start + offset), button, buttons, Qt.NoModifier))
 
+    def assert_text_and_board_fit():
+        labels = 0
+        for cap in view.crs.values():
+            if not cap.isVisibleTo(view.chart_widget):
+                continue
+            for label in (cap.character, cap.codeline):
+                bounds = label.contentsRect().adjusted(label.margin(), label.margin(),
+                                                       -label.margin(), -label.margin())
+                assert bounds.height() >= label.fontMetrics().height(), 'Key text height clipped'
+                assert bounds.width() >= label.fontMetrics().horizontalAdvance(label.text()), 'Key text width clipped'
+                labels += 1
+        mapped = view.scroll_area.transform().mapRect(view.scroll_area.sceneRect())
+        viewport = view.scroll_area.viewport().rect()
+        assert 0 <= viewport.width() - mapped.width() < 2, 'Compact board width detached from window'
+        assert 0 <= viewport.height() - mapped.height() < 2, 'Compact board height detached from window'
+        return labels
+
+    def simulate_font_metrics(fonts, factor):
+        # This alters only our labels, not Windows DPI or any other application.
+        # Emit the real screen object's signal to exercise its current binding,
+        # including the binding restored after native-window recreation.
+        for label, original in fonts.items():
+            font = QFont(original)
+            if factor != 1:
+                font.setPointSizeF(original.pointSizeF() * factor)
+            label.setFont(font)
+        screen = view.windowHandle().screen()
+        screen.logicalDotsPerInchChanged.emit(screen.logicalDotsPerInch() * factor)
+
     try:
         app = QApplication([])
         app.setQuitOnLastWindowClosed(False)
@@ -190,6 +223,17 @@ def check_native(report, save_images=False):
         sample('full')
         original_size = view.size()
         key = next(iter(view.crs.values()))
+        result['display_environment'] = dict(
+            automatic_high_dpi_scaling=app.testAttribute(Qt.AA_EnableHighDpiScaling),
+            win32_awareness=api.GetAwarenessFromDpiAwarenessContext(api.GetThreadDpiAwarenessContext()),
+            window_dpi=api.GetDpiForWindow(int(view.effectiveWinId())),
+            screens=[dict(name=screen.name(), geometry=screen.geometry().getRect(),
+                          logical_dpi=screen.logicalDotsPerInch(), device_pixel_ratio=screen.devicePixelRatio())
+                     for screen in app.screens()],
+            label_font_dpi=key.character.fontMetrics().fontDpi(),
+            label_paint_device_dpi=key.character.logicalDpiY(),
+            label_device_font_dpi=QFontMetrics(key.character.font(), key.character).fontDpi(),
+            physical_monitor_changes_tested=False)
         QTest.mouseClick(view.compact_checkbox, Qt.LeftButton)
         assert view.isCompactMode()
         sample('top-checkbox-compact')
@@ -233,6 +277,38 @@ def check_native(report, save_images=False):
         sample('minimized-mode-change', minimized=True)
         show_guide_without_activation(view)
         sample('minimized-restored')
+
+        # Keep all native transition regressions above. These extra stages
+        # simulate changed font metrics while checking actual desktop pixels;
+        # they are not a claim that Windows monitor settings were changed.
+        view.setCompactMode(True)
+        view.setCompactScale(min(view.compactScale(),
+            (backdrop.width() - 200) / (view.scroll_area.sceneRect().width() * 1.6),
+            (backdrop.height() - 200) / (view.scroll_area.sceneRect().height() * 1.6)))
+        flush()
+        fonts = {label: QFont(label.font()) for cap in view.crs.values()
+                 for label in (cap.character, cap.codeline)}
+        initial_scene = view.scroll_area.sceneRect()
+        initial_size = view.size()
+        requested_scale = view.compactScale()
+        for factor, name in ((1.4, 'simulated-dpi-larger'), (1, 'simulated-dpi-restored')):
+            simulate_font_metrics(fonts, factor)
+            sample(name)
+            stages[-1].update(simulated_display_change=True, labels_fitting=assert_text_and_board_fit())
+            assert view.compactScale() == requested_scale, 'DPI refresh changed the user scale preference'
+            if factor > 1:
+                assert view.scroll_area.sceneRect().height() > initial_scene.height(), 'DPI metrics stayed cached'
+                assert view.height() > initial_size.height(), 'Larger font metrics did not resize compact window'
+            else:
+                assert view.scroll_area.sceneRect() == initial_scene and view.size() == initial_size, 'Restored metrics stayed enlarged'
+        view.hide()
+        simulate_font_metrics(fonts, 1.4)
+        sample('simulated-dpi-hidden', visible=False)
+        stages[-1]['simulated_display_change'] = True
+        show_guide_without_activation(view)
+        sample('simulated-dpi-hidden-restored')
+        stages[-1].update(simulated_display_change=True, labels_fitting=assert_text_and_board_fit())
+        assert view.compactScale() == requested_scale
         result['status'] = 'passed'
     except NativeDesktopUnavailable as error:
         result.update(status='unavailable', skipped=True, reason=str(error))

@@ -2,6 +2,7 @@
 
 from math import ceil, isfinite
 
+from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QTransform
 from PyQt5.QtWidgets import (
@@ -247,6 +248,15 @@ class KeyCap(QFrame):
         tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
                          else self.item_label())
         self.setToolTip(tooltip_label + '\n' + self.code)
+        self.refreshMetrics()
+
+    def refreshMetrics(self):
+        """Recalculate fixed key sizes even when a DPI change keeps the label."""
+        for label in (self.character, self.codeline):
+            # QLabel caches sizeHint. Embedded widgets need that cache reset
+            # when the host changes screen without changing its QFont value.
+            label.setMinimumHeight(0)
+            QApplication.sendEvent(label, QEvent(QEvent.FontChange))
         # A seven-symbol code and translated key names must never be clipped.
         if self.compact == 'inline':
             minimum_width = self.codeline.sizeHint().width() + self.character.sizeHint().width() + 16
@@ -366,6 +376,11 @@ class GuideViewport(QGraphicsView):
         size = self.board.layout().sizeHint().expandedTo(self.board.layout().minimumSize())
         self.board.resize(size)
         self.board.layout().activate()
+        # The proxy can initially clamp the board to its previous minimum.
+        # Once the new child constraints are active, shrink both together.
+        size = self.board.layout().sizeHint().expandedTo(self.board.layout().minimumSize())
+        self.proxy.resize(size.width(), size.height())
+        self.board.layout().activate()
         self.setSceneRect(self.proxy.boundingRect())
         self._fitBoard()
 
@@ -441,6 +456,17 @@ class VirtualKeyboardView(QWidget):
         self._drag_offset = None
         self._resize_edges = Qt.Edges()
         self._resize_origin = None
+        self._screen = None
+        self._screen_window = None
+        self._screen_dirty = False
+        self._screen_refreshing = False
+        self._screen_refresh_timer = QTimer(self)
+        self._screen_refresh_timer.setSingleShot(True)
+        self._screen_refresh_timer.timeout.connect(self._refreshForScreenChange)
+        app = QApplication.instance()
+        app.screenAdded.connect(self._onScreenTopologyChanged)
+        app.screenRemoved.connect(self._onScreenTopologyChanged)
+        app.primaryScreenChanged.connect(self._onScreenTopologyChanged)
         self.setWindowTitle('摩斯输入 · 键盘与鼠标')
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint |
@@ -457,9 +483,93 @@ class VirtualKeyboardView(QWidget):
             self.outer_layout.activate()
             self.scroll_area._fitBoard()
             self.setCompactMode(True)
+        self._bindWindowScreen()
+
+    def _availableGeometry(self):
+        return QApplication.desktop().availableGeometry(self)
+
+    def _bindScreen(self, screen):
+        if screen is self._screen:
+            return
+        signals = ('availableGeometryChanged', 'geometryChanged',
+                   'logicalDotsPerInchChanged', 'physicalDotsPerInchChanged')
+        if self._screen is not None and not sip.isdeleted(self._screen):
+            for name in signals:
+                getattr(self._screen, name).disconnect(self._scheduleScreenRefresh)
+        self._screen = screen
+        if screen is not None:
+            for name in signals:
+                getattr(screen, name).connect(self._scheduleScreenRefresh)
+
+    def _bindWindowScreen(self):
+        # setCompactMode recreates the native window. Never retain the previous
+        # QWindow's subscription or call winId() while it is being destroyed.
+        handle = self.windowHandle()
+        if handle is not self._screen_window:
+            if self._screen_window is not None and not sip.isdeleted(self._screen_window):
+                self._screen_window.screenChanged.disconnect(self._onScreenChanged)
+            self._screen_window = handle
+            if handle is not None:
+                handle.screenChanged.connect(self._onScreenChanged)
+        screen = handle.screen() if handle is not None else None
+        if screen not in QApplication.screens():
+            screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        self._bindScreen(screen)
+
+    def _onScreenChanged(self, screen):
+        self._bindScreen(screen)
+        self._scheduleScreenRefresh()
+
+    def _onScreenTopologyChanged(self, *_args):
+        self._bindWindowScreen()
+        self._scheduleScreenRefresh()
+
+    def _scheduleScreenRefresh(self, *_args):
+        self._screen_dirty = True
+        if not self._screen_refresh_timer.isActive() and not self._screen_refreshing:
+            # Let Qt finish updating font DPI, native geometry and child layouts
+            # before measuring the board. Coalesce the related screen signals.
+            self._screen_refresh_timer.start(0)
+
+    def _refreshForScreenChange(self):
+        if self.isMinimized() or self._drag_offset is not None or self._resize_origin is not None:
+            return  # Resume on restore or after the pointer is released.
+        self._screen_refreshing = True
+        self._screen_dirty = False
+        try:
+            for cap in self.crs.values():
+                cap.refreshMetrics()
+            self.scroll_area.refreshLayout()
+            if self._compact_mode:
+                self._fitCompactWindow()
+            elif not self.isMaximized():
+                available = self._availableGeometry()
+                extra = self.frameGeometry().size() - self.size()
+                self.resize(min(self.width(), max(1, available.width() - max(0, extra.width()))),
+                            min(self.height(), max(1, available.height() - max(0, extra.height()))))
+                frame = self.frameGeometry()
+                self.move(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)),
+                          max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
+            self.outer_layout.activate()
+            self.scroll_area._fitBoard()
+            self.update()
+        finally:
+            self._screen_refreshing = False
+        if self._screen_dirty:
+            self._scheduleScreenRefresh()
+
+    def event(self, event):
+        result = super().event(event)
+        if hasattr(self, '_screen_refresh_timer') and hasattr(self, 'scroll_area'):
+            if event.type() in (QEvent.Show, QEvent.WinIdChange):
+                self._bindWindowScreen()
+                self._scheduleScreenRefresh()
+            elif event.type() in (QEvent.FontChange, QEvent.ApplicationFontChange, QEvent.WindowStateChange):
+                self._scheduleScreenRefresh()
+        return result
 
     def adjustPosition(self):
-        available = QApplication.desktop().availableGeometry(self)
+        available = self._availableGeometry()
         frame = self.frameSize()
         offset_x = int(float(self.config.get('winposx', 10)))
         offset_y = int(float(self.config.get('winposy', 10)))
@@ -872,7 +982,7 @@ class VirtualKeyboardView(QWidget):
         self.setCompactScale(scale, persist=False)
         x = origin.right() + 1 - self.width() if edges & Qt.LeftEdge else origin.x()
         y = origin.bottom() + 1 - self.height() if edges & Qt.TopEdge else origin.y()
-        self._moveInsideScreen(QPoint(x, y), QApplication.desktop().availableGeometry(self))
+        self._moveInsideScreen(QPoint(x, y), self._availableGeometry())
 
     def _fitCompactWindow(self):
         """Make the actual top-level rectangle match the complete board."""
@@ -880,14 +990,15 @@ class VirtualKeyboardView(QWidget):
             return
         self.scroll_area.refreshLayout()
         bounds = self.scroll_area.sceneRect()
-        available = QApplication.desktop().availableGeometry(self)
+        available = self._availableGeometry()
         # Crop the currently rendered keys rather than enlarging them when the
         # surrounding controls disappear. Optional mouse keys may only reduce
         # this scale as needed to stay within the available screen.
         scale = min(self._compact_scale,
                     available.width() / max(1, bounds.width()),
                     available.height() / max(1, bounds.height()))
-        self.resize(ceil(bounds.width() * scale), ceil(bounds.height() * scale))
+        self.resize(min(available.width(), ceil(bounds.width() * scale)),
+                    min(available.height(), ceil(bounds.height() * scale)))
         self.outer_layout.activate()
         self.scroll_area._fitBoard()
         self._moveInsideScreen(self.pos(), available)
@@ -921,6 +1032,8 @@ class VirtualKeyboardView(QWidget):
                 self._resize_origin = None
                 self._resize_edges = Qt.Edges()
                 self._drag_offset = None
+                if self._screen_dirty:
+                    self._scheduleScreenRefresh()
                 watched.setCursor(self._resizeCursor(self._resizeEdges(event.pos())))
                 return True  # Keep QGraphicsView from replacing the resize cursor.
             if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
@@ -930,6 +1043,8 @@ class VirtualKeyboardView(QWidget):
                 self._resize_origin = None
                 self._resize_edges = Qt.Edges()
                 self._drag_offset = None
+                if self._screen_dirty:
+                    self._scheduleScreenRefresh()
                 return True
         return super().eventFilter(watched, event)
 
