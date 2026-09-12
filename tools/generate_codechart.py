@@ -67,9 +67,8 @@ def render_chart(layout_data, key_data):
         "标点和控制键使用本软件约定的编码。",
         "",
         f"默认显示“{page_names.get(default_layout, default_layout)}”统一面板，按实体键盘与鼠标的位置排列。"
-        "键盘沿用原编码，鼠标与候选项采用独立七位码，无需切页。"
-        "设置中的兼容面板保留旧版四页编码；兼容页中的相同编码可能执行不同动作。"
-        "候选项会根据输入动态更新，仅有候选词时可用。"
+        "键盘沿用原编码，鼠标采用独立七位码，无需切页。"
+        "后文保留旧版四页编码，供已有布局对照；兼容页中的相同编码可能执行不同动作。"
         "缩写仅在兼容字母页输入空格完成单词后展开。",
         "",
         "组合键：先输入 Ctrl，再输入 V，即执行一次 Ctrl+V，随后自动释放 Ctrl。"
@@ -101,8 +100,6 @@ def render_chart(layout_data, key_data):
             action = item["action"]
             if action == "CHANGELAYOUT":
                 label = f"切换至{page_names[item['target']]}页"
-            elif action == "PREDICTION_SELECT":
-                label = f"候选{item['target'] + 1}"
             else:
                 if action not in key_data:
                     raise ValueError(f"{page} 页存在未定义动作：{action}")

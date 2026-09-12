@@ -130,6 +130,12 @@ class HotkeyParsingTests(unittest.TestCase):
         self.assertEqual(integration.parse_hotkey('F23'), ('F23', 0, 0x86))
         self.assertEqual(integration.parse_hotkey('Ctrl+Shift+F24'), ('Ctrl+Shift+F24', 6, 0x87))
 
+    def test_every_extended_function_key_can_be_a_standalone_shortcut(self):
+        for number in range(13, 25):
+            with self.subTest(number=number):
+                name = 'F' + str(number)
+                self.assertEqual(integration.parse_hotkey(name), (name, 0, 0x70 + number - 1))
+
     def test_shifted_symbols_have_required_windows_shift_modifier(self):
         self.assertEqual(integration.parse_hotkey('Ctrl+!'), ('Ctrl+!', 6, ord('1')))
         self.assertEqual(integration.parse_hotkey('Ctrl++'), ('Ctrl++', 6, 0xBB))
@@ -181,6 +187,18 @@ class NativeHotkeyTests(unittest.TestCase):
         ready.assert_called_once_with('Ctrl+Alt+M')
         user32.UnregisterHotKey.assert_called_once_with(None, integration.HOTKEY_ID)
         self.assertIsNone(loop._thread_id)
+
+    def test_f22_registers_its_keyboard_vk_without_gamepad_or_modifier_keys(self):
+        user32, kernel32 = fake_native([(integration.WM_HOTKEY, integration.HOTKEY_ID)])
+        activated = Mock()
+        loop = integration.WindowsHotkeyLoop(*integration.parse_hotkey('F22'), activated,
+                                              user32=user32, kernel32=kernel32)
+        user32.MsgWaitForMultipleObjects.side_effect = lambda *args: loop.stop() or 0x102
+        loop.run()
+        user32.RegisterHotKey.assert_called_once_with(None, integration.HOTKEY_ID,
+                                                       integration.MOD_NOREPEAT, 0x85)
+        activated.assert_called_once_with()
+        user32.UnregisterHotKey.assert_called_once_with(None, integration.HOTKEY_ID)
 
     def test_other_hotkey_ids_do_not_activate_the_guide(self):
         loop, user32, _, activated, _ = self.loop([(integration.WM_HOTKEY, 987), (0x0100, 0)])
@@ -243,6 +261,132 @@ class NativeHotkeyTests(unittest.TestCase):
                 patch.object(integration.logging, 'exception'):
             thread.run()
         error.assert_called_once_with('failed')
+
+
+class GuideVisibilityTests(unittest.TestCase):
+    def native_window(self):
+        window, user32 = Mock(), Mock()
+        window.winId.return_value = 0x100001234
+        window.isMinimized.return_value = True
+        window.testAttribute.return_value = False
+        user32.SetWindowPos.return_value = 1
+        return window, user32
+
+    def test_native_show_restores_and_raises_without_any_activating_qt_call(self):
+        window, user32 = self.native_window()
+        operations = Mock()
+        operations.attach_mock(window, 'window')
+        operations.attach_mock(user32, 'native')
+        self.assertTrue(integration.show_guide_without_activation(
+            window, user32=user32, platform_name='Windows'))
+        self.assertEqual(operations.mock_calls, [
+            call.window.setAttribute(Qt.WA_ShowWithoutActivating, True),
+            call.window.testAttribute(Qt.WA_DontShowOnScreen),
+            call.window.show(), call.window.winId(), call.window.isMinimized(),
+            call.native.ShowWindow(0x100001234, 4),
+            call.native.SetWindowPos(0x100001234, -1, 0, 0, 0, 0, 0x53),
+        ])
+        window.showNormal.assert_not_called()
+        window.raise_.assert_not_called()
+        window.activateWindow.assert_not_called()
+        user32.SetForegroundWindow.assert_not_called()
+
+    def test_nonminimized_show_preserves_maximized_native_window_state(self):
+        window, user32 = self.native_window()
+        window.isMinimized.return_value = False
+        integration.show_guide_without_activation(window, user32=user32, platform_name='Windows')
+        user32.ShowWindow.assert_called_once_with(0x100001234, 8)
+        window.showNormal.assert_not_called()
+        window.setWindowState.assert_not_called()
+
+    def test_minimized_frame_change_uses_native_nonactivating_minimize(self):
+        window, user32 = self.native_window()
+        # Changing Qt window flags has already cleared the old window state.
+        window.isMinimized.return_value = False
+        self.assertTrue(integration.show_guide_without_activation(
+            window, keep_minimized=True, user32=user32, platform_name='Windows'))
+        user32.ShowWindow.assert_called_once_with(0x100001234, 7)
+        window.activateWindow.assert_not_called()
+        window.showNormal.assert_not_called()
+        user32.SetForegroundWindow.assert_not_called()
+
+    def test_previous_hidden_showwindow_result_is_not_treated_as_an_error(self):
+        window, user32 = self.native_window()
+        user32.ShowWindow.return_value = 0
+        self.assertTrue(integration.show_guide_without_activation(
+            window, user32=user32, platform_name='Windows'))
+        user32.SetWindowPos.assert_called_once()
+
+    def test_position_failure_is_logged_without_activating_fallback(self):
+        window, user32 = self.native_window()
+        user32.SetWindowPos.return_value = 0
+        with patch.object(integration.ctypes, 'get_last_error', return_value=5), \
+                patch.object(integration.logging, 'warning') as warning:
+            self.assertFalse(integration.show_guide_without_activation(
+                window, user32=user32, platform_name='Windows'))
+        warning.assert_called_once()
+        self.assertEqual(warning.call_args.args[-1], 5)
+        window.activateWindow.assert_not_called()
+        window.showNormal.assert_not_called()
+        user32.SetForegroundWindow.assert_not_called()
+
+    def test_recreated_window_uses_its_current_handle(self):
+        window, user32 = self.native_window()
+        window.winId.side_effect = [0x100001234, 0x100005678]
+        for _ in range(2):
+            integration.show_guide_without_activation(window, user32=user32, platform_name='Windows')
+        self.assertEqual(user32.ShowWindow.call_args_list,
+                         [call(0x100001234, 4), call(0x100005678, 4)])
+        self.assertEqual(user32.SetWindowPos.call_args.args[0], 0x100005678)
+
+    def test_native_window_handles_are_pointer_sized(self):
+        window, user32 = self.native_window()
+        integration.show_guide_without_activation(window, user32=user32, platform_name='Windows')
+        for function, indices in ((user32.ShowWindow, (0,)), (user32.SetWindowPos, (0, 1))):
+            for index in indices:
+                self.assertEqual(ctypes.sizeof(function.argtypes[index]), ctypes.sizeof(ctypes.c_void_p))
+
+    def test_other_platform_uses_qt_without_loading_windows_api(self):
+        window = Mock()
+        with patch.object(integration.ctypes, 'WinDLL') as loader:
+            self.assertTrue(integration.show_guide_without_activation(window, platform_name='Linux'))
+        loader.assert_not_called()
+        window.setAttribute.assert_called_once_with(Qt.WA_ShowWithoutActivating, True)
+        window.showNormal.assert_called_once_with()
+        window.raise_.assert_called_once_with()
+        window.activateWindow.assert_not_called()
+        window.winId.assert_not_called()
+
+    def test_offscreen_qt_ids_are_never_passed_to_native_windows_api(self):
+        window = Mock()
+        window.testAttribute.return_value = False
+        with patch.object(integration.QGuiApplication, 'platformName', return_value='offscreen'), \
+                patch.object(integration.ctypes, 'WinDLL') as loader:
+            self.assertTrue(integration.show_guide_without_activation(window, platform_name='Windows'))
+        loader.assert_not_called()
+        window.showNormal.assert_called_once_with()
+        window.winId.assert_not_called()
+
+    def test_dont_show_on_screen_never_calls_native_display_even_with_windows_backend(self):
+        for minimized in (False, True):
+            with self.subTest(minimized=minimized):
+                window, user32 = self.native_window()
+                window.testAttribute.return_value = True
+                with patch.object(integration.QGuiApplication, 'platformName', return_value='windows'):
+                    self.assertTrue(integration.show_guide_without_activation(
+                        window, keep_minimized=minimized, user32=user32, platform_name='Windows'))
+                user32.ShowWindow.assert_not_called()
+                user32.SetWindowPos.assert_not_called()
+                window.winId.assert_not_called()
+                (window.showMinimized if minimized else window.showNormal).assert_called_once_with()
+
+    def test_minimized_frame_change_without_native_backend_stays_minimized(self):
+        window = Mock()
+        self.assertTrue(integration.show_guide_without_activation(
+            window, keep_minimized=True, platform_name='Linux'))
+        window.showMinimized.assert_called_once_with()
+        window.showNormal.assert_not_called()
+        window.raise_.assert_not_called()
 
 
 class FakeHotkeyThread(QObject):

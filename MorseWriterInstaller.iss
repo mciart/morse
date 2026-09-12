@@ -48,6 +48,9 @@ Source: "dist\MorseWriter\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 [InstallDelete]
 ; Older installers used a Startup shortcut in addition to the Run value.
 Type: files; Name: "{userstartup}\MorseWriter.lnk"
+; Remove only retired bundled seeds; never touch writable user_data.
+Type: files; Name: "{app}\_internal\defaults\morsewriter.sqlite"
+Type: files; Name: "{app}\_internal\res\morsewriter_pressagio.ini"
 
 [Icons]
 Name: "{userprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
@@ -62,6 +65,76 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\{#MyAppExeName}"; Description: "运行摩斯输入"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
 
 [Code]
+const
+  MorseWriterUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{2DB71CE2-A8F1-4EB9-BA6D-EE1EAD16659C}_is1';
+  MorseWriterRunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+
+var
+  StartupDefaultApplied: Boolean;
+
+function ParameterSetsStartup(const Parameter: String): Boolean;
+var
+  Value: String;
+begin
+  Value := Lowercase(Parameter);
+  { /TASKS replaces every task; /LOADINF supplies explicit saved choices. }
+  Result := (Pos('/tasks=', Value) = 1) or (Pos('/loadinf=', Value) = 1);
+  if Result or (Pos('/mergetasks=', Value) <> 1) then
+    Exit;
+  Value := Copy(Value, 13, Length(Value));
+  StringChangeEx(Value, ' ', '', True);
+  StringChangeEx(Value, '"', '', True);
+  Value := ',' + Value + ',';
+  Result := (Pos(',autostart,', Value) > 0) or
+    (Pos(',!autostart,', Value) > 0) or (Pos(',*autostart,', Value) > 0);
+end;
+
+function HasExplicitStartupChoice: Boolean;
+var
+  Index: Integer;
+begin
+  Result := True;
+  for Index := 1 to ParamCount do
+    if ParameterSetsStartup(ParamStr(Index)) then
+      Exit;
+  Result := False;
+end;
+
+function ReadPreviousStartupPreference(var Enabled: Boolean): Boolean;
+var
+  PreviousDirectory, Command: String;
+begin
+  { Use this AppId's installed path, even when the new destination changes. }
+  Result := RegQueryStringValue(HKCU, MorseWriterUninstallKey,
+    'Inno Setup: App Path', PreviousDirectory);
+  if not Result or (PreviousDirectory = '') then begin
+    Result := False;
+    Exit;
+  end;
+  Enabled := RegQueryStringValue(HKCU, MorseWriterRunKey, 'MorseWriter', Command) and
+    (CompareText(Trim(Command), '"' + AddBackslash(PreviousDirectory) +
+      '{#MyAppExeName}" --startup') = 0);
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Enabled: Boolean;
+begin
+  { Task controls are created on this page, including in silent installs.
+    Apply once so Back/Next never discards the user's current checkbox choice. }
+  if (CurPageID <> wpSelectTasks) or StartupDefaultApplied then
+    Exit;
+  StartupDefaultApplied := True;
+  if HasExplicitStartupChoice then
+    Exit;
+  if ReadPreviousStartupPreference(Enabled) then begin
+    if Enabled then
+      WizardSelectTasks('autostart')
+    else
+      WizardSelectTasks('!autostart');
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then

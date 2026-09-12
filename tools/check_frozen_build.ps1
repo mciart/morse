@@ -56,11 +56,12 @@ try {
     if ($report.theme -ne 'system' -or $report.input_hooks -ne $false -or $report.startup_hidden -ne $true) {
         throw '新用户默认主题、无输入钩子或隐藏启动校验失败。'
     }
-    $database = Resolve-SmokePath $report.database
+    $userData = Resolve-SmokePath $report.user_data
     $expectedDataRoot = (Resolve-SmokePath $env:LOCALAPPDATA).TrimEnd('\') + '\'
-    if (-not $database.StartsWith($expectedDataRoot, [StringComparison]::OrdinalIgnoreCase) -or
-        -not (Test-Path -LiteralPath $database -PathType Leaf)) {
-        throw '词库未写入隔离的用户目录。'
+    if (-not $userData.StartsWith($expectedDataRoot, [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath (Join-Path $userData 'config.json') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $userData 'layouts.json') -PathType Leaf)) {
+        throw '设置与码表未写入隔离的用户目录。'
     }
     Write-Output "独立程序验收通过：$($report.version)，主题跟随系统，码表 $($report.guide_actions) 项。"
 }

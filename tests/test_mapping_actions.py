@@ -56,9 +56,6 @@ class MappingActionTests(unittest.TestCase):
         self.enterContext(patch.object(morse, "user_data_dir", data_path, create=True))
         self.enterContext(patch.object(morse, "get_user_data_dir", return_value=data_path))
         temporary = self.enterContext(TemporaryDirectory())
-        database_resolver = morse.prediction_database
-        self.enterContext(patch.object(morse, 'prediction_database',
-                                       side_effect=lambda *args, **kwargs: database_resolver(temporary)))
         config_path = Path(temporary) / "config.json"
         config_path.write_text(json.dumps(dict(
             morse.DEFAULT_CONFIG, keylen=3, withsound=False, guide_layout='main',
@@ -158,8 +155,8 @@ class MappingActionTests(unittest.TestCase):
                 self.enter_code(code)
                 self.assertEqual(self.backend.mock_calls, [call.write(character, exact=True)])
 
-    def test_function_keys_and_number_page_work_without_prediction_state(self):
-        self.window.closePrediction()
+    def test_function_keys_and_number_page_work_without_text_state(self):
+        self.window.clearTextState()
         for number, code in enumerate(FUNCTION_CODES, 1):
             with self.subTest(function=number):
                 self.backend.reset_mock()
@@ -204,7 +201,7 @@ class MappingActionTests(unittest.TestCase):
                          call.write("see ", exact=True)])
         self.assertEqual(self.window.typestate.text, "see ")
 
-    def test_expansion_and_candidate_preserve_case_and_replace_the_complete_prefix(self):
+    def test_abbreviation_expansion_preserves_case_and_replaces_the_complete_prefix(self):
         self.enter_code("111211")
         for character in "afaik":
             self.enter_code(LETTER_CODES[character])
@@ -213,24 +210,6 @@ class MappingActionTests(unittest.TestCase):
         self.enter_code("1122")
         self.backend.write.assert_called_once_with("as far as I know ", exact=True)
         self.assertEqual(self.window.typestate.text, "as far as I know ")
-
-        for character in "op":
-            self.enter_code(LETTER_CODES[character])
-        self.select_page("main")
-        self.enter_code("121121")
-        self.enter_code("21212")
-        self.select_page("typing")
-        self.assertEqual(self.window.key_output.held_modifiers, ("ctrl",))
-        self.backend.reset_mock()
-        with patch.object(self.window.typestate, "getpredictions", return_value=["OpenAI"]):
-            self.enter_code("111111")  # Choose the first candidate through its actual code.
-        self.assertEqual(self.backend.mock_calls, [call.release("ctrl"),
-                         call.send("backspace"), call.send("backspace"),
-                         call.write("OpenAI ", exact=True)])
-        self.assertEqual(self.window.typestate.text, "as far as I know OpenAI ")
-        self.assertEqual(self.window.key_output.held_modifiers, ())
-        self.assertFalse(self.window.key_output.lock_mode)
-        self.assertFalse(self.window.repeaton)
 
     def test_ctrl_v_is_a_one_shot_shortcut_through_real_codes(self):
         self.enter_code("21212")  # Ctrl.

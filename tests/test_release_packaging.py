@@ -14,7 +14,6 @@ class ReleaseResourceTests(unittest.TestCase):
         items = build_release.resources()
         self.assertEqual({str(target) for _, target in items}, {
             'defaults/layouts.json', 'defaults/abbreviations_en.txt',
-            'defaults/morsewriter.sqlite', 'res/morsewriter_pressagio.ini',
             'version', 'LICENSE',
         })
         self.assertTrue(all('*' not in str(source) for source, _ in items))

@@ -1,15 +1,31 @@
-# Development Guide
+# 开发与构建
 
-You need Python 3.x\
-
-
-`pip install -r requirements.txt`\
-`python MorseCodeGUI.py`\
-\
-and away you go\
-\
-There is a build script
+在项目目录中使用 Python 3 创建虚拟环境并运行：
 
 ```powershell
-build.ps1
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe MorseCodeGUI.py
 ```
+
+界面、输入引擎、系统监听、音频与 Windows 集成各自独立。结构说明见 [项目说明](../README.markdown)。英文预测功能已移除；构建不需要预测依赖和词库。
+
+## 验证
+
+```powershell
+.\.venv\Scripts\python.exe tools/generate_codechart.py --check
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+码表由 `user_data/layouts.json` 与动作定义生成。修改映射后先执行 `tools/generate_codechart.py`，再检查生成结果。测试使用模拟键鼠和音频，不能替代实际设备延迟或游戏兼容性验证。
+
+## Windows 安装包
+
+```powershell
+.\build.ps1 -BootstrapCompiler
+.\tools\check_frozen_build.ps1
+```
+
+构建脚本执行测试、资源校验、程序打包和中文安装包生成；安装包与 SHA256 校验文件位于 `dist`。编译器解包到项目的 `build/tools`，不安装全局工具。程序包只包含清单内的资源，不带开发者配置、日志或个人数据。
+
+发布前更新根目录 `version` 和 `docs/releases` 中的中文说明。发布工作流使用版本标签对应的代码重新构建、验证，再上传到 GitHub Release。

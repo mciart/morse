@@ -1,13 +1,16 @@
 """A single, spatial Morse guide for keyboard and mouse actions."""
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen
+from math import ceil
+
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QTransform
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGraphicsScene, QGraphicsView, QGridLayout,
-    QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
 )
 
 from ui_theme import THEME_COLORS
+from windows_integration import show_guide_without_activation
 
 
 def morse(code):
@@ -186,10 +189,8 @@ class KeyCap(QFrame):
         self.label_override = label
         self.raw_code = item['code']
         self.code = morse(self.raw_code)
-        self.is_prediction = item.get('action') == 'PREDICTION_SELECT'
         self.is_available = True
         self._prefix_matches = True
-        self._candidate_text = ''
         self.disabledchars = 0
         self.is_enabled = True
         self.toggled = False
@@ -203,8 +204,6 @@ class KeyCap(QFrame):
         self.character = KeyLabel()
         self.character.setTextFormat(Qt.PlainText)
         self.character.setAlignment(Qt.AlignCenter)
-        if self.is_prediction:
-            self.character.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.codeline = KeyLabel()
         self.codeline.setAlignment(Qt.AlignCenter)
         self.codeline.setTextFormat(Qt.PlainText)
@@ -236,33 +235,20 @@ class KeyCap(QFrame):
 
     def updateView(self):
         label = self.label_override if self.label_override is not None else self.item_label()
-        self.is_available = bool(label) if self.is_prediction else True
         self.is_enabled = self._prefix_matches and self.is_available
-        if self.is_prediction:
-            label = str(self.item.get('target', 0) + 1) + ' · ' + (label or '—')
-        elif (self.config.get('upperchars', False) and self.item.get('action') in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        if (self.config.get('upperchars', False) and self.item.get('action') in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
               and len(self.item.get('action', '')) == 1 and len(label) == 1 and label in 'abcdefghijklmnopqrstuvwxyz'):
             label = label.upper()
         self._refreshAppearance()
         if label == self._content_label:
             return
         self._content_label = label
-        if self.is_prediction:
-            self._candidate_text = label
-            self._elide_candidate_label()
-        else:
-            self.character.setText(label)
-        if self.is_prediction:
-            tooltip_label = '候选 ' + str(self.item.get('target', 0) + 1) + '：'
-            tooltip_label += self.item_label() if self.is_available else '暂无可用词语\n该位置当前不能选择。'
-        else:
-            tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
-                             else self.item_label())
+        self.character.setText(label)
+        tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
+                         else self.item_label())
         self.setToolTip(tooltip_label + '\n' + self.code)
         # A seven-symbol code and translated key names must never be clipped.
-        if self.is_prediction:
-            minimum_width = self.codeline.sizeHint().width() + 12
-        elif self.compact == 'inline':
+        if self.compact == 'inline':
             minimum_width = self.codeline.sizeHint().width() + self.character.sizeHint().width() + 16
         else:
             minimum_width = max(self.codeline.sizeHint().width(), self.character.sizeHint().width()) + 12
@@ -302,15 +288,6 @@ class KeyCap(QFrame):
         painter.setPen(QPen(QColor(border), 1))
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 6, 6)
 
-    def _elide_candidate_label(self):
-        self.character.setText(self.character.fontMetrics().elidedText(
-            self._candidate_text, Qt.ElideRight, max(1, self.width() - 12)))
-
-    def resizeEvent(self, event):
-        if self.is_prediction:
-            self._elide_candidate_label()
-        super().resizeEvent(event)
-
     def enabled(self):
         return self.is_enabled
 
@@ -348,6 +325,8 @@ class MouseShell(QFrame):
     """A recognizable mouse silhouette around the actual button mappings."""
 
     def paintEvent(self, event):
+        if self.property('compactOverlay'):
+            return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(QPen(QColor(THEME_COLORS['border']), 1.4))
@@ -370,6 +349,7 @@ class GuideViewport(QGraphicsView):
         self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform)
         self.setFocusPolicy(Qt.NoFocus)
         self.auto_fit = True
+        self.compact = False
         self.proxy = None
 
     def setBoard(self, board):
@@ -399,7 +379,15 @@ class GuideViewport(QGraphicsView):
     def _fitBoard(self):
         if self.proxy is None:
             return
-        if self.auto_fit:
+        if self.compact:
+            # fitInView reserves a margin. The overlay instead uses its exact
+            # content bounds, so there is no invisible border around the keys.
+            bounds = self.sceneRect()
+            if bounds.width() > 0 and bounds.height() > 0:
+                scale = min(self.viewport().width() / bounds.width(),
+                            self.viewport().height() / bounds.height())
+                self.setTransform(QTransform.fromScale(scale, scale))
+        elif self.auto_fit:
             self.fitInView(self.sceneRect(), Qt.KeepAspectRatio)
         else:
             self.resetTransform()
@@ -416,6 +404,7 @@ class VirtualKeyboardView(QWidget):
     changeLayoutSignal = pyqtSignal(str)
     mouseVisibilityChanged = pyqtSignal(bool)
     autoFitChanged = pyqtSignal(bool)
+    compactModeChanged = pyqtSignal(bool)
 
     DISPLAY_NAMES = {
         'ESCAPE': 'Esc', 'TAB': 'Tab', 'TABLEFT': 'Shift+Tab',
@@ -433,7 +422,9 @@ class VirtualKeyboardView(QWidget):
         self.config = config
         self.crs = {}
         self.keystroke_crs_map = {}
-        self._items = [item for item in layout['items'] if not item.get('emptyspace')]
+        # Old user layouts can still contain removed prediction mappings.
+        self._items = [item for item in layout['items'] if not item.get('emptyspace')
+                       and item.get('action') != 'PREDICTION_SELECT']
         self._by_action = {}
         for item in self._items:
             self._by_action.setdefault(item['action'], []).append(item)
@@ -443,6 +434,10 @@ class VirtualKeyboardView(QWidget):
         self._section_titles = []
         self._mouse_visible = bool(config.get('show_mouse', False))
         self._auto_fit = bool(config.get('guide_auto_fit', True))
+        self._compact_mode = False
+        self._compact_scale = 1.0
+        self._full_geometry = None
+        self._drag_offset = None
         self.setWindowTitle('摩斯输入 · 键盘与鼠标')
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint |
@@ -455,6 +450,10 @@ class VirtualKeyboardView(QWidget):
         available = QApplication.desktop().availableGeometry()
         self.resize(min(1280, available.width() - 32), min(780, available.height() - 64))
         self.adjustPosition()
+        if config.get('guide_compact', False):
+            self.outer_layout.activate()
+            self.scroll_area._fitBoard()
+            self.setCompactMode(True)
 
     def adjustPosition(self):
         available = QApplication.desktop().availableGeometry(self)
@@ -514,9 +513,11 @@ class VirtualKeyboardView(QWidget):
 
     def _build(self):
         outer = QVBoxLayout(self)
+        self.outer_layout = outer
         outer.setContentsMargins(16, 12, 16, 8)
         outer.setSpacing(10)
-        self.header = QGridLayout()
+        self.header_widget = QWidget()
+        self.header = QGridLayout(self.header_widget)
         self.header.setContentsMargins(0, 0, 0, 0)
         self.header.setHorizontalSpacing(10)
         self.header.setVerticalSpacing(4)
@@ -547,12 +548,19 @@ class VirtualKeyboardView(QWidget):
         self.auto_fit_checkbox.setToolTip('缩放完整对照表；关闭后按设置字号显示，并可滚动查看。')
         self.auto_fit_checkbox.toggled.connect(self.setAutoFit)
         options.addWidget(self.auto_fit_checkbox)
+        self.compact_checkbox = QCheckBox('精简显示')
+        self.compact_checkbox.setToolTip('只显示透明键位板；拖动按键可移动，右键可返回完整显示。')
+        self.compact_checkbox.toggled.connect(self.setCompactMode)
+        options.addWidget(self.compact_checkbox)
         self._compact_header = None
         self._set_compact_header(self.width() < 760)
-        outer.addLayout(self.header)
+        outer.addWidget(self.header_widget)
         outer.addWidget(self.input_feedback)
 
         self.scroll_area = GuideViewport()
+        self.scroll_area.viewport().installEventFilter(self)
+        self.scroll_area.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.scroll_area.customContextMenuRequested.connect(self._showContextMenu)
         self.chart_widget = QWidget()
         self.chart_widget.setObjectName('guideBoard')
         body = QHBoxLayout(self.chart_widget)
@@ -587,16 +595,14 @@ class VirtualKeyboardView(QWidget):
             ['QUESTION', 'COLON', 'DOUBLEQUOTE', 'OPENBRACKET', 'CLOSEBRACKET', 'LESSTHAN', 'MORETHAN', 'UNDERSCORE'],
         ):
             symbols.addLayout(self._row(row, compact=True))
-        predictions = [item for item in self._items if item['action'] == 'PREDICTION_SELECT']
-        if predictions:
-            symbols.addSpacing(8)
-            symbols.addWidget(self._title('词语候选'))
-            prediction_row = QHBoxLayout()
-            prediction_row.setSpacing(5)
-            for item in sorted(predictions, key=lambda entry: entry.get('target', 0)):
-                cap = self._cap('PREDICTION_SELECT', compact=True, item=item)
-                prediction_row.addWidget(cap, 1)
-            symbols.addLayout(prediction_row)
+        tools = QHBoxLayout()
+        tools.setSpacing(5)
+        for action in ('STARTMENU', 'REPEATMODE', 'SOUND'):
+            cap = self._cap(action, compact=True)
+            if cap:
+                tools.addWidget(cap)
+        tools.addStretch(2)
+        symbols.addLayout(tools)
         symbols.addStretch()
         extras.addLayout(symbols, 3)
         navigation = QVBoxLayout()
@@ -619,14 +625,6 @@ class VirtualKeyboardView(QWidget):
         symbol_tools.setSpacing(5)
         symbol_tools.addLayout(extras)
         keyboard.addLayout(symbol_tools)
-        tools = QHBoxLayout()
-        tools.setSpacing(5)
-        for action in ('STARTMENU', 'REPEATMODE', 'SOUND'):
-            cap = self._cap(action, compact=True)
-            if cap:
-                tools.addWidget(cap)
-        tools.addStretch(2)
-        keyboard.addLayout(tools)
         body.addLayout(keyboard, 3)
         self.mouse_panel = QWidget()
         self.mouse_panel.setLayout(self._mouse_panel())
@@ -642,6 +640,9 @@ class VirtualKeyboardView(QWidget):
                 grid.addWidget(self._cap(item['action'], compact=True, item=item), index // 3, index % 3)
             keyboard.addLayout(grid)
         keyboard.addStretch()
+        self._annotations = [label for label in self.chart_widget.findChildren(QLabel)
+                             if not isinstance(label, KeyLabel)]
+        self._annotation_visibility = {}
         self.scroll_area.setBoard(self.chart_widget)
         self.scroll_area.setAutoFit(self._auto_fit)
         outer.addWidget(self.scroll_area, 1)
@@ -656,6 +657,7 @@ class VirtualKeyboardView(QWidget):
         panel.setSpacing(7)
         panel.addLayout(self._title('鼠标', '按键与八向移动'))
         shell = MouseShell()
+        self.mouse_shell = shell
         shell_layout = QVBoxLayout(shell)
         shell_layout.setContentsMargins(15, 25, 15, 12)
         shell_layout.setSpacing(5)
@@ -734,6 +736,126 @@ class VirtualKeyboardView(QWidget):
         self._set_compact_header(event.size().width() < 760)
         super().resizeEvent(event)
 
+    def isCompactMode(self):
+        return self._compact_mode
+
+    def setCompactMode(self, value):
+        """Switch presentation without replacing the board or input session."""
+        value = bool(value)
+        self.config['guide_compact'] = value
+        if value == self._compact_mode:
+            return
+        was_visible, was_minimized = self.isVisible(), self.isMinimized()
+        if value:
+            self._compact_scale = self.scroll_area.transform().m11()
+            self._full_geometry = QRect(self.normalGeometry() if self.isMaximized() or was_minimized else self.geometry())
+        self._compact_mode = value
+        self._drag_offset = None
+        self.compact_checkbox.blockSignals(True)
+        self.compact_checkbox.setChecked(value)
+        self.compact_checkbox.blockSignals(False)
+
+        # Changing native flags can recreate the HWND. Keep the same Qt widget,
+        # graphics proxy ownership, and signal connections throughout.
+        flags = self.windowFlags()
+        if value:
+            flags |= Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus
+        else:
+            flags &= ~(Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, value)
+        self.setAttribute(Qt.WA_NoSystemBackground, value)
+        self.setFocusPolicy(Qt.NoFocus if value else Qt.StrongFocus)
+        self.setMinimumSize(1, 1) if value else self.setMinimumSize(360, 280)
+        self.header_widget.setVisible(not value)
+        self.input_feedback.setVisible(not value)
+        self.status_bar.setVisible(not value)
+        self.outer_layout.setContentsMargins(0, 0, 0, 0) if value else self.outer_layout.setContentsMargins(16, 12, 16, 8)
+        self.outer_layout.setSpacing(0 if value else 10)
+        self.scroll_area.compact = value
+        self.scroll_area.setAutoFit(value or self._auto_fit)
+        self.mouse_shell.setProperty('compactOverlay', value)
+        if value:
+            self._annotation_visibility = {label: not label.isHidden() for label in self._annotations}
+        for label, was_shown in self._annotation_visibility.items():
+            label.setVisible(was_shown and not value)
+        self.scroll_area.viewport().setCursor(Qt.SizeAllCursor if value else Qt.ArrowCursor)
+        self.updateTheme()
+        if not was_minimized:
+            self.setWindowState(Qt.WindowNoState)
+        if value:
+            self._fitCompactWindow()
+        elif self._full_geometry is not None:
+            self.setGeometry(self._full_geometry)
+        self.outer_layout.activate()
+        if was_visible:
+            if was_minimized:
+                show_guide_without_activation(self, keep_minimized=True)
+            else:
+                show_guide_without_activation(self)
+        self.compactModeChanged.emit(value)
+
+    def _fitCompactWindow(self):
+        """Make the actual top-level rectangle match the complete board."""
+        if not self._compact_mode:
+            return
+        self.scroll_area.refreshLayout()
+        bounds = self.scroll_area.sceneRect()
+        available = QApplication.desktop().availableGeometry(self)
+        # Crop the currently rendered keys rather than enlarging them when the
+        # surrounding controls disappear. Optional mouse keys may only reduce
+        # this scale as needed to stay within the available screen.
+        scale = min(self._compact_scale,
+                    available.width() / max(1, bounds.width()),
+                    available.height() / max(1, bounds.height()))
+        self.resize(ceil(bounds.width() * scale), ceil(bounds.height() * scale))
+        self.outer_layout.activate()
+        self.scroll_area._fitBoard()
+        self._moveInsideScreen(self.pos(), available)
+
+    def _moveInsideScreen(self, position, available=None):
+        if available is None:
+            screen = QApplication.screenAt(position + self.rect().center())
+            available = screen.availableGeometry() if screen else QApplication.desktop().availableGeometry(self)
+        self.move(max(available.left(), min(position.x(), available.right() - self.width() + 1)),
+                  max(available.top(), min(position.y(), available.bottom() - self.height() + 1)))
+
+    def eventFilter(self, watched, event):
+        if self._compact_mode and watched is self.scroll_area.viewport():
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._drag_offset = event.globalPos() - self.pos()
+                return True
+            if event.type() == QEvent.MouseMove and self._drag_offset is not None:
+                if event.buttons() & Qt.LeftButton:
+                    self._moveInsideScreen(event.globalPos() - self._drag_offset)
+                    return True
+                self._drag_offset = None
+            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                self._drag_offset = None
+                return True
+        return super().eventFilter(watched, event)
+
+    def createViewMenu(self):
+        """Provide an exit from the frameless view without a permanent toolbar."""
+        menu = QMenu(self)
+        display_action = menu.addAction('完整显示' if self._compact_mode else '精简显示')
+        target_mode = not self._compact_mode
+        display_action.triggered.connect(lambda checked=False: self.setCompactMode(target_mode))
+        mouse_action = menu.addAction('显示鼠标')
+        mouse_action.setCheckable(True)
+        mouse_action.setChecked(self._mouse_visible)
+        mouse_action.toggled.connect(self.setMouseVisible)
+        menu.addSeparator()
+        menu.addAction('返回设置', self.settingsRequested.emit)
+        menu.addAction('隐藏码表', self.hide)
+        return menu
+
+    def _showContextMenu(self, position):
+        menu = self.createViewMenu()
+        menu.exec_(self.scroll_area.viewport().mapToGlobal(position))
+        menu.deleteLater()
+
     def setMouseVisible(self, value):
         value = bool(value)
         changed = value != self._mouse_visible
@@ -744,6 +866,7 @@ class VirtualKeyboardView(QWidget):
         self.mouse_checkbox.blockSignals(False)
         self.mouse_panel.setVisible(value)
         self.scroll_area.refreshLayout()
+        self._fitCompactWindow()
         if changed:
             self.mouseVisibilityChanged.emit(value)
 
@@ -755,7 +878,7 @@ class VirtualKeyboardView(QWidget):
         self.auto_fit_checkbox.blockSignals(True)
         self.auto_fit_checkbox.setChecked(value)
         self.auto_fit_checkbox.blockSignals(False)
-        self.scroll_area.setAutoFit(value)
+        self.scroll_area.setAutoFit(value or self._compact_mode)
         if changed:
             self.autoFitChanged.emit(value)
 
@@ -813,18 +936,22 @@ class VirtualKeyboardView(QWidget):
 
     def updateTheme(self):
         colors = THEME_COLORS
+        background = 'transparent' if self._compact_mode else colors['background']
         self.setStyleSheet(
             'VirtualKeyboardView, QGraphicsView { background: %s; }'
             'QLabel#guideHint { color: %s; }'
-            % (colors['background'], colors['muted'])
+            % (background, colors['muted'])
         )
+        self.scroll_area.viewport().setAutoFillBackground(not self._compact_mode)
+        self.scroll_area.viewport().setStyleSheet('background: %s;' % background)
         self.input_feedback.updateTheme()
         self.chart_widget.setStyleSheet(
             'QWidget#guideBoard { background: %s; } QLabel#guideHint { color: %s; }'
-            % (colors['background'], colors['muted']))
+            % (background, colors['muted']))
         for cap in self.crs.values():
             cap.updateView()
         self.scroll_area.refreshLayout()
+        self._fitCompactWindow()
         self.update()
 
     def closeEvent(self, event):

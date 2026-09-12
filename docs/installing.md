@@ -1,14 +1,25 @@
-# Installing
+# 安装与使用
 
+适用于 Windows 10 / 11 x64。从 [版本发布页](https://github.com/mciart/morse/releases/latest) 下载 `MorseWriter-Setup-v版本号-x64.exe`，按中文向导安装，无需另装 Python。程序默认安装到当前用户目录，配置保存在 `%LOCALAPPDATA%\MorseWriter\user_data`，升级保留偏好。
 
+1. 打开设置，选择一到三个输入键。双键模式第一个键输入点，第二个键输入划；三键模式用第三个键确认字符。
+2. 使用手柄映射时可选 F23 / F24，鼠标侧键可选 X1 / X2。点击“标准电键预设”可体验双键长按连发、15 WPM 的标准节奏。
+3. 点击“开始输入”，切回目标应用。先在记事本练习 `E（•）` 与 `T（—）`。
 
-* Download the MorseWriter application and the code chart from the provided link.
-* Run `MorseWriter.exe`.
-* Configure your options:
-  * For two-key mode, the key on the left dropdown menu corresponds to `dit` (•), and the key on the right corresponds to `dah` (−).
-  * Optionally, use a third key for the return character to avoid timing issues.
-* Press "Go".
-* Minimize the coding window if needed.
-* Minimize the black debug window. Note: Closing this window will close the application.
-* All normal key entry is now disabled. To stop the script, use the system tray icon to quit the app.
-* To escape Morse entry, use `Ctrl + Shift + P` to pause it.
+仅选定的输入键会被拦截；通过托盘取消“启用输入”即可暂停并恢复普通按键用途。码表的“返回设置”也会停止输入。
+
+## 显示码表
+
+默认快捷键是 **Ctrl+Alt+Shift+M**。在设置的“启动与快捷键”中直接选择 **F22** 等功能键，或录入自定义组合键，点击“应用”即可修改。快捷键不能与输入键重复。隐藏码表时输入继续运行。
+
+码表顶部的“精简显示”将窗口收紧到键位区域，只保留按键及按键内文字、摩斯码，按键之间透明；按住键位区域拖动可移动窗口，右键可恢复完整显示。托盘和设置也提供精简开关。鼠标对照默认隐藏，可独立开启。
+
+码表置顶，恢复时不主动抢走目标应用焦点。游戏建议使用无边框全屏或窗口模式；不能保证覆盖独占全屏画面。
+
+## 托盘与开机自启
+
+- 最小化按钮收到任务栏；× 隐藏到系统托盘，保持输入。点击托盘图标可恢复窗口。
+- 托盘“启用输入”带勾表示正在接收输入；“退出”会关闭软件并释放监听与修饰键。
+- 设置中的“开机自启，并收进系统托盘”立即生效；需要开机后直接接收输入时，再开启并保存“启动后自动开始输入”。
+
+更多输入、声音、组合键与手柄设置见 [完整使用说明](../README.markdown)。

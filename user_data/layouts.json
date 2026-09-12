@@ -2,7 +2,6 @@
   "layouts": {
     "desktop": {
       "display_name": "键盘与鼠标",
-      "supports_prediction": true,
       "column_len": 15,
       "items": [
         {"code": "12", "action": "A"},
@@ -133,37 +132,12 @@
         {"code": "2122122", "action": "MOUSERELEASEHOLD"},
         {"code": "2122211", "action": "MOUSECLICKRIGHT"},
         {"code": "2122212", "action": "MOUSEDBLCLICKRIGHT"},
-        {"code": "2122221", "action": "MOUSECLKHLDRIGHT"},
-        {"action": "PREDICTION_SELECT", "target": 0, "code": "2211111"},
-        {"action": "PREDICTION_SELECT", "target": 1, "code": "2211112"},
-        {"action": "PREDICTION_SELECT", "target": 2, "code": "2211121"},
-        {"action": "PREDICTION_SELECT", "target": 3, "code": "2211122"},
-        {"action": "PREDICTION_SELECT", "target": 4, "code": "2211211"},
-        {"action": "PREDICTION_SELECT", "target": 5, "code": "2211212"},
-        {"action": "PREDICTION_SELECT", "target": 6, "code": "2211221"},
-        {"action": "PREDICTION_SELECT", "target": 7, "code": "2211222"}
+        {"code": "2122221", "action": "MOUSECLKHLDRIGHT"}
       ]
     },
     "typing": {
-        "supports_prediction": true,
         "column_len": 15,
         "items": [
-            { "code": "111111", "action": "PREDICTION_SELECT", "target": 0 },
-            { "code": "111112", "action": "PREDICTION_SELECT", "target": 1 },
-            { "code": "111121", "action": "PREDICTION_SELECT", "target": 2 },
-            { "code": "111122", "action": "PREDICTION_SELECT", "target": 3 },
-            { "code": "111211", "action": "PREDICTION_SELECT", "target": 4 },
-            { "code": "111212", "action": "PREDICTION_SELECT", "target": 5 },
-            { "code": "111222", "action": "PREDICTION_SELECT", "target": 6 },
-            { "code": "112111", "action": "PREDICTION_SELECT", "target": 7 },
-            { "code": "None_1", "emptyspace": true },
-            { "code": "None_2", "emptyspace": true },
-            { "code": "None_3", "emptyspace": true },
-            { "code": "None_4", "emptyspace": true },
-            { "code": "None_5", "emptyspace": true },
-            { "code": "None_6", "emptyspace": true },
-            { "code": "None_7", "emptyspace": true },
-            { "code": "None_8", "emptyspace": true },
             { "code": "12", "action": "A" },
             { "code": "2111", "action": "B" },
             { "code": "2121", "action": "C" },
@@ -210,7 +184,6 @@
         ]
     },
     "main": {
-      "supports_prediction": true,
       "column_len": 15,
       "items": [
         { "code": "12", "action": "A" },
@@ -318,7 +291,6 @@
       ]
     },
     "mouse": {
-      "supports_prediction": false,
       "column_len": 2,
       "items": [
         { "code": "1", "action": "MOUSERIGHT5" },
@@ -357,7 +329,6 @@
       ]
     },
     "number": {
-      "supports_prediction": false,
       "column_len": 6,
       "items": [
         { "code": "1", "action": "ONE" },

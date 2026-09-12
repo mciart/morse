@@ -3,8 +3,6 @@
 from pathlib import Path
 import sys
 
-from PyInstaller.utils.hooks import collect_submodules
-
 project = Path(SPECPATH)
 sys.path.insert(0, str(project / 'tools'))
 from build_release import pyinstaller_datas, read_version, version_info
@@ -15,7 +13,7 @@ a = Analysis(
     pathex=[str(project)],
     binaries=[],
     datas=pyinstaller_datas(project),
-    hiddenimports=['PyQt5.sip', 'keyboard._winkeyboard'] + collect_submodules('pressagio'),
+    hiddenimports=['PyQt5.sip', 'keyboard._winkeyboard'],
     hookspath=[],
     runtime_hooks=[],
     excludes=['tkinter', 'nava'],

@@ -1,6 +1,6 @@
-# Table of contents
+# 文档目录
 
-* [What is MorseWriter?](README.md)
-* [Installing](installing.md)
-* [MorseCode key chart](morsecode-key-chart.md)
-* [Development Guide](development-guide.md)
+- [摩斯输入](README.md)
+- [安装与使用](installing.md)
+- [摩斯码对照](morsecode-key-chart.md)
+- [开发与构建](development-guide.md)

@@ -1,8 +1,10 @@
-# What is MorseWriter?
+# 摩斯输入
 
-MorseWriter is a system tray application that interprets one or two key presses in a Morse code pattern and converts them into key equivalents. This allows users with good timing to access and control their entire computer using one, two, three keys or switches. You can emulate the full computer keyboard and mouse. There is also a typing mode which has word predictions.
+用一到三个按键输入摩斯码，完成文字输入、键盘快捷键与鼠标操作。界面使用简体中文，码表按美式键盘布局排列，默认自动缩放并跟随系统主题。
 
+码表可切换为仅有键位区域的透明精简叠加层，通过 F22 等可配置的全局快捷键显示或隐藏。鼠标对照默认关闭；已移除英文词语候选和预测功能。
 
-
-
-
+- [安装与使用](installing.md)
+- [摩斯码对照](morsecode-key-chart.md)
+- [开发与构建](development-guide.md)
+- [完整使用说明](../README.markdown)

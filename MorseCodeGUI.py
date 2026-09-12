@@ -1,5 +1,4 @@
 # Standard library imports
-import configparser
 import json
 import logging
 import os
@@ -24,8 +23,6 @@ from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout
 import keyboard
 import mouse
 # Local application/library specific imports
-import pressagio.callback
-import pressagio
 import icons_rc
 from ui_theme import ThemeManager, THEME_COLORS
 from keyboard_output import KeyboardOutput
@@ -33,8 +30,9 @@ from virtual_keyboard import VirtualKeyboardView
 from morse_engine import MorseEngine
 from input_listener import KeyListenerThread
 from tone_audio import ToneAudio
-from windows_integration import StartupRegistration, GlobalHotkey, parse_hotkey, DEFAULT_GLOBAL_HOTKEY
-from app_paths import source_resource, bootstrap_assets, prediction_database
+from windows_integration import (StartupRegistration, GlobalHotkey, parse_hotkey,
+                                 DEFAULT_GLOBAL_HOTKEY, show_guide_without_activation)
+from app_paths import source_resource, bootstrap_assets
 from app_paths import user_data_dir as writable_user_data_dir
 
 def get_user_data_dir(app_name="MorseWriter"):
@@ -62,6 +60,7 @@ DEFAULT_CONFIG = {
   "theme": "system",
   "guide_layout": "desktop",
   "guide_auto_fit": True,
+  "guide_compact": False,
   "show_mouse": False,
   "keylen": 1,
   "keyone": "SPACE",
@@ -378,8 +377,6 @@ class ConfigManager:
 
         # Define special actions with correct lambda capturing
         actions["CHANGELAYOUT"] = lambda item, win=window: ChangeLayoutAction(item, win.changeLayout)
-        actions["PREDICTION_SELECT"] = lambda item, win=window: PredictionSelectLayoutAction(
-            item, get_predictions_func=win.getTypeStatePredictions, select_prediction_func=win.selectPrediction)
 
         # Assuming the action name is stored in item['action'] and matches keys in key_data
         actions["KEYSTROKE"] = lambda item, kd=self.key_data, win=window: ActionKeyStroke(
@@ -393,62 +390,21 @@ class ConfigManager:
         return actions
 
 
-class TypeState(pressagio.callback.Callback):
+class TypeState:
+    """Plain output buffer used by the compatibility page's abbreviations."""
+
     def __init__ (self, abbreviations=None):
         self.text = ""
-        self.predictions = None
-
-        pressagioconfig_file = str(source_resource('res', 'morsewriter_pressagio.ini'))
-        logging.debug(f"[TypeState] Searching for pressagio config file with name: {pressagioconfig_file}")
-
-        pressagioconfig = configparser.ConfigParser()
-        pressagioconfig.read(pressagioconfig_file)
-        pressagioconfig.set('Database', 'database', str(prediction_database(get_user_data_dir())))
-
-        database = pressagioconfig.get("Database", "database")
-        logging.debug(f"[TypeState] Searching for database file: {database}")
-
-        if pressagioconfig:
-            try:
-                self.presage = pressagio.Pressagio(self, pressagioconfig)
-                logging.debug("[TypeState] Pressagio Initialized successfully")
-            except Exception as e:
-                logging.error(f"[TypeState] Pressagio Failed to Initialize with error={e}")
-
         self.abbreviations = abbreviations
         self.expanded_text = None
         self.keyLength = 0
 
-    def past_stream (self):
-        # The dependency's reverse tokenizer cannot advance past a separator
-        # at index zero. Keep output text intact and trim only prediction input.
-        return self.text.lstrip(pressagio.character.blankspaces + pressagio.character.separators)
-    def future_stream (self):
-        return ""
     def pushchar (self, char):
         self.text += char
-        self.predictions = None
-        logging.debug(f"Updated TypeState text: {self.text}")
     def pushstr (self, str):
         self.text += str
-        self.predictions = None
-        logging.debug(f"Updated TypeState text: {self.text}")
     def popchar (self):
         self.text = self.text[:-1]
-        self.predictions = None
-    def getpredictions(self):
-        logging.debug("[TypeState] Fetching predictions for text: {}".format(self.text))
-        if self.predictions is None:
-            try:
-                self.predictions = self.presage.predict()
-                logging.debug("[TypeState] Predictions fetched: {}".format(self.predictions))
-
-            except Exception as e:
-                logging.error(f"[TypeState] Failed to generate predictions: {str(e)}")
-                self.predictions = []
-
-        return self.predictions
-
 
     def get_abbreviation(self):
         logging.debug("[TypeState] Fetching abbreviation for text: {}".format(self.text))
@@ -493,17 +449,6 @@ class KeyCombinationListener(QObject):
         self.current_key = 0
 
 
-class PressagioCallback(pressagio.callback.Callback):
-    def __init__(self, buffer):
-        super().__init__()
-        self.buffer = buffer
-
-    def past_stream(self):
-        return self.buffer
-
-    def future_stream(self):
-        return ""
-
 class LayoutManager:
     def __init__(self, layout_file):
         self.layout_file = layout_file
@@ -518,6 +463,12 @@ class LayoutManager:
             with open(self.layout_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.layouts = {k: v for k, v in data['layouts'].items()}
+            # Old user layouts keep their custom keys on disk. Retired candidate
+            # commands are ignored in memory when opening those layouts.
+            for layout in self.layouts.values():
+                layout['items'] = [item for item in layout.get('items', [])
+                                   if item.get('action') != 'PREDICTION_SELECT']
+                layout.pop('supports_prediction', None)
             self.main_layout_name = data.get('mainlayout')
             self.active_layout_name = data.get('mainlayout')
             if self.active_layout_name not in self.layouts:
@@ -747,23 +698,6 @@ class ChangeLayoutAction(Action):
 #             raise ValueError(f"Layout '{target_layout}' not found")
 
 
-class PredictionSelectLayoutAction(Action):
-    def __init__(self, item, get_predictions_func, select_prediction_func):
-        super().__init__(item)
-        self.get_predictions_func = get_predictions_func
-        self.select_prediction_func = select_prediction_func
-
-    def getlabel(self):
-        predictions = self.get_predictions_func()
-        target = self.item.get('target', -1)
-        if 0 <= target < len(predictions):
-            return predictions[target]
-        return ""
-
-    def perform(self):
-        self.select_prediction_func(self.item.get('target', -1))
-
-
 class RepeatOnAction(Action):
     def __init__(self, item, repeat_on_callback):
         super(RepeatOnAction, self).__init__(item)
@@ -846,12 +780,8 @@ class Window(QDialog):
         self.layoutManager.set_active(preferred)
         logging.debug("[Window init] Active layout successfully set to: %s", self.layoutManager.active_layout_name)
         # Check for specific layout types that may require special handling
-        self.closePrediction()
-        if self.layoutManager.get_active_layout().get('supports_prediction', False):
-            self.abbreviations = load_abbreviations(os.path.join(user_data_dir,"abbreviations_en.txt"))
-            self.typestate = TypeState(self.abbreviations)
-        else:
-            self.typestate = None
+        self.clearTextState()
+        self.initTypeState()
         logging.debug(f"[Window init] layout that is active is: {self.layoutManager.main_layout_name} ")
         self.showCodeView()
         logging.debug(f"[Window init] Initial visibility status: {self.codeslayoutview.isVisible()}")
@@ -969,10 +899,13 @@ class Window(QDialog):
         self.backToSettings()
         QMessageBox.warning(self, '输入设备不可用', message)
 
-    def closePrediction(self):
-        state, self.typestate = self.typestate, None
-        if state is not None and hasattr(state, 'presage'):
-            state.presage.close_database()
+    def clearTextState(self):
+        self.typestate = None
+
+    def initTypeState(self):
+        if self.typestate is None and self.layoutManager.active_layout_name in ('desktop', 'main', 'typing'):
+            self.abbreviations = load_abbreviations(os.path.join(get_user_data_dir(), 'abbreviations_en.txt'))
+            self.typestate = TypeState(self.abbreviations)
 
     def changeLayout(self, layout_name):
         if layout_name not in self.layoutManager.layouts:
@@ -990,9 +923,7 @@ class Window(QDialog):
         if self.codeslayoutview is not None:
             self.codeslayoutview.hide()
             self.codeslayoutview.deleteLater()
-        if self.typestate is None and self.layoutManager.get_active_layout().get('supports_prediction', False):
-            self.abbreviations = load_abbreviations(os.path.join(get_user_data_dir(), 'abbreviations_en.txt'))
-            self.typestate = TypeState(self.abbreviations)
+        self.initTypeState()
         self.showCodeView()
 
     def showCodeView(self):
@@ -1009,6 +940,7 @@ class Window(QDialog):
         if isinstance(view, VirtualKeyboardView):
             view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
             view.autoFitChanged.connect(self.changeGuideAutoFit)
+            view.compactModeChanged.connect(self.changeGuideCompact)
         self.updateOutputState()
         if not self._start_hidden:
             view.show()
@@ -1046,6 +978,16 @@ class Window(QDialog):
         if self.codeslayoutview is not None:
             self.codeslayoutview.setOutputState(self.key_output.held_modifiers, self.repeaton)
 
+    def changeGuideCompact(self, enabled):
+        enabled = bool(enabled)
+        self.config['guide_compact'] = enabled
+        self.configManager.config['guide_compact'] = enabled
+        self.guideCompactCheckBox.setChecked(enabled)
+        self.compactGuideAction.setChecked(enabled)
+        if isinstance(self.codeslayoutview, VirtualKeyboardView):
+            self.codeslayoutview.setCompactMode(enabled)
+        self.configManager.save_config(self.configManager.config)
+
     def toggleSound(self):
         self.config['withsound'] = not self.config['withsound']
         self.withSound.setChecked(self.config['withsound'])
@@ -1057,35 +999,13 @@ class Window(QDialog):
         current = names.index(self.layoutManager.active_layout_name)
         self.changeLayout(names[(current + 1) % len(names)])
 
-    def selectPrediction(self, target):
-        if self.typestate is None:
-            return
-        predictions = self.typestate.getpredictions()
-        if not 0 <= target < len(predictions):
-            return
-        self.resetOutput()
-        self.repeaton = False
-        # Match the predictor's word boundary, preserving preceding punctuation.
-        suffix = pressagio.tokenizer.ReverseTokenizer(self.typestate.text).next_token()
-        for _ in suffix:
-            self.key_output.send('backspace', '\b')
-            self.typestate.popchar()
-        self.typestate.pushstr(self.key_output.send_text(predictions[target] + ' '))
-
-
-
-    def getTypeStatePredictions(self):
-        logging.debug(f"[Window] getTypeStatePredictions")
-        if self.typestate:
-            return self.typestate.getpredictions()
-        return []
-
     def collect_config(self):
         config = {
             **self.config,
             'theme': self.themeComboBox.currentData(),
             'show_mouse': self.showMouseCheckBox.isChecked(),
             'guide_auto_fit': self.guideAutoFitCheckBox.isChecked(),
+            'guide_compact': self.guideCompactCheckBox.isChecked(),
             'keylen': self.keySelectionRadioOneKey.isChecked() and 1 or self.keySelectionRadioTwoKey.isChecked() and 2 or 3,
             'keyone': self.iconComboBoxKeyOne.itemData(self.iconComboBoxKeyOne.currentIndex()),
             'keytwo': self.iconComboBoxKeyTwo.itemData(self.iconComboBoxKeyTwo.currentIndex()),
@@ -1148,7 +1068,7 @@ class Window(QDialog):
         if self._shutting_down:
             return
         self._shutting_down = True
-        for cleanup in (self.guide_hotkey.stop, self.stopIt, self.closePrediction, self.resetOutput, self.audio.shutdown):
+        for cleanup in (self.guide_hotkey.stop, self.stopIt, self.clearTextState, self.resetOutput, self.audio.shutdown):
             try:
                 cleanup()
             except Exception:
@@ -1176,9 +1096,12 @@ class Window(QDialog):
 
     def showCurrentWindow(self):
         target = self.codeslayoutview if self.codeslayoutview is not None else self
-        target.showNormal()
-        target.raise_()
-        target.activateWindow()
+        if target is self:
+            target.showNormal()
+            target.raise_()
+            target.activateWindow()
+        else:
+            show_guide_without_activation(target)
 
     def toggleGuideVisibility(self):
         target = self.codeslayoutview if self.codeslayoutview is not None else self
@@ -1195,12 +1118,65 @@ class Window(QDialog):
         if not self.hotkeyEnabledCheck.isChecked():
             return ''
         sequence = self.hotkeyEdit.keySequence().toString(QKeySequence.PortableText)
-        canonical, _modifiers, _key = parse_hotkey(sequence)
+        count = (1 if self.keySelectionRadioOneKey.isChecked() else
+                 2 if self.keySelectionRadioTwoKey.isChecked() else 3)
+        inputs = [box.currentData() for box in (
+            self.iconComboBoxKeyOne, self.iconComboBoxKeyTwo,
+            self.iconComboBoxKeyThree)[:count]]
+        if self.listenerThread is not None:
+            inputs += [self.config.get(name) for name in
+                       ('keyone', 'keytwo', 'keythree')[:int(self.config.get('keylen', 1))]]
+        return self.validateGuideHotkey(sequence, inputs)
+
+    def validateGuideHotkey(self, sequence, inputs):
+        canonical, _modifiers, trigger_key = parse_hotkey(sequence)
+        for name in inputs:
+            stroke = self.keystrokemap.get(name)
+            key_name = stroke.key_code if stroke is not None else name
+            try:
+                # The input hook consumes its key with modifiers held too.
+                _text, _mask, input_key = parse_hotkey('Ctrl+' + str(key_name))
+            except ValueError:
+                continue  # Mouse buttons and side-specific modifier inputs.
+            if trigger_key == input_key:
+                raise ValueError('码表快捷键不能与摩斯输入键相同，请选择另一个按键。')
         return canonical
+
+    def changeGuideHotkeyPreset(self):
+        sequence = self.hotkeyPresetComboBox.currentData()
+        if sequence is not None:
+            previous = self.hotkeyEdit.blockSignals(True)
+            self.hotkeyEdit.setKeySequence(QKeySequence(sequence))
+            self.hotkeyEdit.blockSignals(previous)
+        self.updateGuideHotkeyControls()
+
+    def syncGuideHotkeyPreset(self):
+        sequence = self.hotkeyEdit.keySequence().toString(QKeySequence.PortableText)
+        index = self.hotkeyPresetComboBox.findData(sequence)
+        previous = self.hotkeyPresetComboBox.blockSignals(True)
+        self.hotkeyPresetComboBox.setCurrentIndex(
+            index if index >= 0 else self.hotkeyPresetComboBox.findData(None))
+        self.hotkeyPresetComboBox.blockSignals(previous)
+        self.updateGuideHotkeyControls()
+
+    def updateGuideHotkeyControls(self):
+        enabled = self.hotkeyEnabledCheck.isChecked() and self.guide_hotkey.supported
+        self.hotkeyPresetComboBox.setEnabled(enabled)
+        self.hotkeyEdit.setEnabled(enabled)
+        self.hotkeyEdit.setVisible(self.hotkeyPresetComboBox.currentData() is None)
 
     def applyGuideHotkey(self):
         if self._desktop_integration_started:
-            self.guide_hotkey.set_sequence(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY))
+            sequence = self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)
+            if sequence:
+                inputs = [self.config.get(name) for name in
+                          ('keyone', 'keytwo', 'keythree')[:int(self.config.get('keylen', 1))]]
+                try:
+                    self.validateGuideHotkey(sequence, inputs)
+                except ValueError as error:
+                    self.hotkeyError(str(error))
+                    return
+            self.guide_hotkey.set_sequence(sequence)
 
     def saveGuideHotkey(self):
         try:
@@ -1424,6 +1400,10 @@ class Window(QDialog):
         self.fontSizeScaleEdit.setValue(round(float(self.config.get('fontsizescale', 100))))
         appearance.addWidget(self.fontSizeScaleLabel, 2, 0)
         appearance.addWidget(self.fontSizeScaleEdit, 2, 1)
+        self.guideCompactCheckBox = QCheckBox('精简显示：仅保留透明键位叠加层')
+        self.guideCompactCheckBox.setChecked(self.config.get('guide_compact', False))
+        self.guideCompactCheckBox.clicked.connect(self.changeGuideCompact)
+        appearance.addWidget(self.guideCompactCheckBox, 3, 0, 1, 2)
         self.guideAutoFitCheckBox.toggled.connect(self.updateGuideScaleAvailability)
         self.updateGuideScaleAvailability()
         inputSettingsLayout.addWidget(appearance_group)
@@ -1448,17 +1428,25 @@ class Window(QDialog):
         self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
         startup_layout.addWidget(self.hotkeyEnabledCheck)
         shortcut_row = QHBoxLayout()
-        self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
+        self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey') or DEFAULT_GLOBAL_HOTKEY))
         self.hotkeyEdit.setToolTip('按下新的组合键后点击“应用”；未开始输入时切换设置窗口。')
-        self.hotkeyEdit.setEnabled(self.hotkeyEnabledCheck.isChecked() and self.guide_hotkey.supported)
-        self.hotkeyEnabledCheck.toggled.connect(self.hotkeyEdit.setEnabled)
-        shortcut_row.addWidget(self.hotkeyEdit, 1)
+        self.hotkeyPresetComboBox = QComboBox()
+        self.hotkeyPresetComboBox.addItem(DEFAULT_GLOBAL_HOTKEY + '（默认）', DEFAULT_GLOBAL_HOTKEY)
+        for number in range(13, 25):
+            self.hotkeyPresetComboBox.addItem(f'F{number}', f'F{number}')
+        self.hotkeyPresetComboBox.addItem('自定义组合键…', None)
+        self.syncGuideHotkeyPreset()
+        self.hotkeyPresetComboBox.currentIndexChanged.connect(self.changeGuideHotkeyPreset)
+        self.hotkeyEdit.keySequenceChanged.connect(self.syncGuideHotkeyPreset)
+        self.hotkeyEnabledCheck.toggled.connect(self.updateGuideHotkeyControls)
+        shortcut_row.addWidget(self.hotkeyPresetComboBox, 1)
         self.hotkeyApplyButton = QPushButton('应用')
         self.hotkeyApplyButton.setEnabled(self.guide_hotkey.supported)
         self.hotkeyApplyButton.clicked.connect(self.saveGuideHotkey)
         shortcut_row.addWidget(self.hotkeyApplyButton)
         startup_layout.addLayout(shortcut_row)
-        self.hotkeyStatus = QLabel('全局快捷键；隐藏码表时输入继续运行。')
+        startup_layout.addWidget(self.hotkeyEdit)
+        self.hotkeyStatus = QLabel('可直接选择 F22，再点击“应用”；隐藏码表时输入继续运行。')
         self.hotkeyStatus.setWordWrap(True)
         startup_layout.addWidget(self.hotkeyStatus)
         inputSettingsLayout.addWidget(startup_group)
@@ -1584,6 +1572,9 @@ class Window(QDialog):
 
     def createActions(self):
         self.showWindowAction = QAction("显示窗口", self, triggered=self.showCurrentWindow)
+        self.compactGuideAction = QAction('精简显示', self, checkable=True,
+                                         triggered=self.changeGuideCompact)
+        self.compactGuideAction.setChecked(self.config.get('guide_compact', False))
         self.onOffAction = QAction('启用输入', self, checkable=True, triggered=self.toggleOnOff)
         self.onOpenSettingsAction = QAction("打开设置", self, triggered=self.onOpenSettings)
         self.quitAction = QAction("退出", self, triggered=self.quitApplication)
@@ -1591,6 +1582,7 @@ class Window(QDialog):
     def createTrayIcon(self):
         self.trayIconMenu = QMenu(self)
         self.trayIconMenu.addAction(self.showWindowAction)
+        self.trayIconMenu.addAction(self.compactGuideAction)
         self.trayIconMenu.addAction(self.onOffAction)
         self.trayIconMenu.addSeparator()
         self.trayIconMenu.addAction(self.onOpenSettingsAction)
@@ -1716,8 +1708,6 @@ class Window(QDialog):
                 return False, '无效码：' + morse_code.replace('1', '•').replace('2', '—')
             action = item['_action']
             label = action.getlabel()
-            if item.get('action') == 'PREDICTION_SELECT' and not label:
-                return False, '该候选暂无可用词语'
             action.perform()
             logging.debug('Completed Morse action: %s', item.get('action'))
             return True, label or item.get('action', '')

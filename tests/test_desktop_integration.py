@@ -94,6 +94,64 @@ class DesktopIntegrationTests(TestCase):
         warning.assert_called_once()
         self.assertTrue(self.window.startupCheckbox.isChecked())  # Failed disable rolls back.
 
+    def test_f22_can_be_selected_without_a_physical_function_key(self):
+        selector = self.window.hotkeyPresetComboBox
+        for number in range(13, 25):
+            self.assertGreaterEqual(selector.findData(f'F{number}'), 0)
+        selector.setCurrentIndex(selector.findData('F22'))
+        self.assertEqual(self.window.selectedGuideHotkey(), 'F22')
+        self.assertTrue(self.window.hotkeyEdit.isHidden())
+        with patch.object(self.window.guide_hotkey, 'set_sequence') as register:
+            self.window.startDesktopIntegration()
+            self.window.hotkeyApplyButton.click()
+            register.assert_called_with('F22')
+        self.assertEqual(self.window.configManager.config['guide_hotkey'], 'F22')
+        selector.setCurrentIndex(selector.findData(None))
+        self.assertFalse(self.window.hotkeyEdit.isHidden())
+        self.window.hotkeyEdit.setKeySequence(morse.QKeySequence('Ctrl+Shift+F10'))
+        self.assertEqual(self.window.selectedGuideHotkey(), 'Ctrl+Shift+F10')
+
+    def test_hotkey_rejects_a_key_already_used_for_morse_input(self):
+        selector = self.window.hotkeyPresetComboBox
+        selector.setCurrentIndex(selector.findData('F22'))
+        box = self.window.iconComboBoxKeyOne
+        box.setCurrentIndex(box.findData('F22'))
+        self.window.hotkeyApplyButton.click()
+        self.assertIn('不能与摩斯输入键相同', self.window.hotkeyStatus.text())
+        self.assertNotEqual(self.window.config.get('guide_hotkey'), 'F22')
+        self.window.hotkeyEdit.setKeySequence(morse.QKeySequence('Ctrl+F22'))
+        self.window.hotkeyApplyButton.click()
+        self.assertIn('不能与摩斯输入键相同', self.window.hotkeyStatus.text())
+        self.assertNotEqual(self.window.config.get('guide_hotkey'), 'Ctrl+F22')
+
+    def test_guide_restore_uses_no_activation_helper(self):
+        view, _listener = self.start_input()
+        view.hide()
+        with patch.object(morse, 'show_guide_without_activation') as restore:
+            self.window.showCurrentWindow()
+        restore.assert_called_once_with(view)
+
+    def test_conflicting_legacy_hotkey_is_reported_at_startup_without_overwriting_it(self):
+        self.window.config.update(keyone='F22', guide_hotkey='Ctrl+F22')
+        with patch.object(self.window.guide_hotkey, 'set_sequence') as register:
+            self.window.startDesktopIntegration()
+        register.assert_not_called()
+        self.assertIn('不能与摩斯输入键相同', self.window.hotkeyStatus.text())
+        self.assertEqual(self.window.config['guide_hotkey'], 'Ctrl+F22')
+
+    def test_compact_choice_syncs_between_guide_tray_and_settings(self):
+        self.window.goForIt()
+        view = self.window.codeslayoutview
+        self.views.append(view)
+        self.window.compactGuideAction.trigger()
+        self.assertTrue(view.isCompactMode())
+        self.assertTrue(self.window.guideCompactCheckBox.isChecked())
+        self.assertTrue(self.window.configManager.config['guide_compact'])
+        view.setCompactMode(False)
+        self.assertFalse(self.window.compactGuideAction.isChecked())
+        self.assertFalse(self.window.guideCompactCheckBox.isChecked())
+        self.assertFalse(self.window.configManager.config['guide_compact'])
+
     def test_default_theme_is_system_and_first_launch_does_not_register_startup(self):
         self.assertEqual(morse.DEFAULT_CONFIG['theme'], 'system')
         self.assertEqual(self.window.themeComboBox.currentData(), 'system')

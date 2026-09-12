@@ -22,7 +22,6 @@ class ApplicationPathTests(unittest.TestCase):
         self.seeds = {
             "layouts.json": '{"layouts": [{"name": "desktop"}]}',
             "abbreviations_en.txt": "u\tyou\n",
-            "morsewriter.sqlite": "pristine bundled database",
         }
         (self.bundle / "defaults").mkdir(parents=True)
         for name, text in self.seeds.items():
@@ -44,20 +43,16 @@ class ApplicationPathTests(unittest.TestCase):
             self.assertEqual(app_paths.source_resource("res/x.ini"), self.bundle / "res" / "x.ini")
             self.assertEqual(app_paths.user_data_dir(), self.root / "local appdata" / "MorseWriter" / "user_data")
 
-    def test_first_run_uses_system_theme_defaults_and_separate_writable_database(self):
+    def test_first_run_uses_system_theme_defaults_without_a_word_database(self):
         # Personal files next to the build source must never seed preferences.
         (self.bundle / "user_data").mkdir()
         (self.bundle / "user_data" / "config.json").write_text('{"theme": "dark"}', encoding="utf-8")
         result = self.bootstrap()
         self.assertEqual(result, self.data)
         self.assertEqual(json.loads((self.data / "config.json").read_text(encoding="utf-8")), self.defaults)
-        database = app_paths.prediction_database(self.data, resource_dir=self.bundle)
-        self.assertEqual(database, self.data / "morsewriter.sqlite")
-        database.write_text("learned personal phrases", encoding="utf-8")
-        self.bootstrap()
-        self.assertEqual(database.read_text(encoding="utf-8"), "learned personal phrases")
-        self.assertEqual((self.bundle / "defaults/morsewriter.sqlite").read_text(encoding="utf-8"),
-                         self.seeds["morsewriter.sqlite"])
+        self.assertFalse((self.data / "morsewriter.sqlite").exists())
+        self.assertEqual({path.name for path in self.data.iterdir()},
+                         {'config.json', 'layouts.json', 'abbreviations_en.txt', app_paths.BOOTSTRAP_MARKER})
 
     def test_existing_preferences_and_custom_data_are_never_overwritten(self):
         self.data.mkdir()
@@ -88,7 +83,7 @@ class ApplicationPathTests(unittest.TestCase):
         self.assertEqual(json.loads((self.data / "config.json").read_text(encoding="utf-8")),
                          {"theme": "dark", "fastMorseMode": True})
         self.assertEqual((self.data / "abbreviations_en.txt").read_text(encoding="utf-8"), "hi\t你好\n")
-        self.assertEqual((self.data / "morsewriter.sqlite").read_text(encoding="utf-8"), self.seeds["morsewriter.sqlite"])
+        self.assertFalse((self.data / "morsewriter.sqlite").exists())
         self.assertEqual((self.data / "layouts.json").read_text(encoding="utf-8"), self.seeds["layouts.json"])
         self.assertFalse((self.data / "old.log").exists())
         self.assertFalse((self.data / "other.txt").exists())
@@ -113,15 +108,15 @@ class ApplicationPathTests(unittest.TestCase):
             target.write_text(self.seeds[name], encoding="utf-8")
         app_paths.bootstrap_assets(self.defaults, data_dir=self.data, resource_dir=source)
         self.assertEqual((self.data / "layouts.json").read_text(encoding="utf-8"), self.seeds["layouts.json"])
-        self.assertEqual((self.data / "morsewriter.sqlite").read_text(encoding="utf-8"), self.seeds["morsewriter.sqlite"])
+        self.assertFalse((self.data / "morsewriter.sqlite").exists())
 
     def test_missing_bundle_asset_does_not_publish_an_incomplete_first_run(self):
-        (self.bundle / "defaults/morsewriter.sqlite").unlink()
+        (self.bundle / "defaults/abbreviations_en.txt").unlink()
         with self.assertRaises(FileNotFoundError):
             self.bootstrap()
         self.assertFalse((self.data / "config.json").exists())
         self.assertFalse((self.data / app_paths.BOOTSTRAP_MARKER).exists())
-        self.assertFalse((self.data / "morsewriter.sqlite").exists())
+        self.assertFalse((self.data / "abbreviations_en.txt").exists())
 
 
 if __name__ == "__main__":

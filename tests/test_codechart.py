@@ -24,8 +24,8 @@ class CodeChartTests(unittest.TestCase):
         self.assertIn("## 键盘与鼠标（默认）", expected)
         for page in ("主键盘", "字母", "鼠标", "数字"):
             self.assertIn(f"## {page}\n", expected)
-        for number in range(1, 9):
-            self.assertIn(f"| 候选{number} |", expected)
+        self.assertNotIn("候选", expected)
+        self.assertIn("本页共 129 项", expected)
 
     def test_layout_specific_codes_and_source_labels_are_preserved(self):
         layouts = deepcopy(self.layouts)

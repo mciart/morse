@@ -15,7 +15,7 @@ import sys
 import threading
 
 from PyQt5.QtCore import QCoreApplication, QObject, QThread, Qt, pyqtSignal
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtGui import QGuiApplication, QKeySequence
 
 
 DEFAULT_GLOBAL_HOTKEY = 'Ctrl+Alt+Shift+M'
@@ -29,6 +29,55 @@ MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 HOTKEY_ID = 0x4D57
+
+
+def show_guide_without_activation(window, *, keep_minimized=False,
+                                  user32=None, platform_name=None):
+    """Show/restore a guide above desktop windows without taking input focus.
+
+    Call from the Qt GUI thread. Read the current HWND on every invocation:
+    changing Qt window flags can recreate it. ``keep_minimized`` preserves a
+    minimized guide while its frame changes. Native failures are logged and
+    return False; there is deliberately no activating fallback on Windows.
+    """
+    window.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    native_windows = (platform_name or platform.system()) == 'Windows'
+    # Qt's offscreen/minimal plugins expose synthetic IDs, not native HWNDs.
+    # Smoke validation also keeps real Windows widgets off the user's screen.
+    if (window.testAttribute(Qt.WA_DontShowOnScreen) or not native_windows
+            or (user32 is None and QGuiApplication.platformName() != 'windows')):
+        if keep_minimized:
+            window.showMinimized()
+        else:
+            window.showNormal()
+            window.raise_()
+        return True
+
+    if user32 is None:
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                   ctypes.c_int, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.SetWindowPos.restype = wintypes.BOOL
+
+    # Keep Qt visibility bookkeeping in sync without Qt's activating
+    # showNormal()/restore path. Only restore minimized windows: applying
+    # SW_SHOWNOACTIVATE to a maximized window would silently unmaximize its
+    # native HWND while Qt still believes it is maximized.
+    window.show()
+    hwnd = int(window.winId())
+    # SW_SHOWMINNOACTIVE also handles Qt's hidden showMinimized path, which
+    # can ignore minimization when WA_ShowWithoutActivating is enabled.
+    show_mode = 7 if keep_minimized else 4 if window.isMinimized() else 8
+    # SW_SHOWMINNOACTIVE / SW_SHOWNOACTIVATE / SW_SHOWNA.
+    user32.ShowWindow(hwnd, show_mode)  # Zero means previously hidden, not failure.
+    if not user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0053):
+        # HWND_TOPMOST; SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW.
+        logging.warning('无法将码表置顶（Windows 错误 %s）。', ctypes.get_last_error())
+        return False
+    return True
 
 
 def startup_command(executable=None, script_path=None, frozen=None):

@@ -122,7 +122,7 @@ class KeyerIntegrationTests(unittest.TestCase):
             self.assertEqual(self.window.get_configured_keys(), expected)
             saved = json.loads(Path(self.window.configManager.config_file).read_text())
             self.assertEqual((saved['keyone'], saved['keytwo']), (a, b))
-        self.assertEqual(len(self.window.codeslayoutview.crs), 137)
+        self.assertEqual(len(self.window.codeslayoutview.crs), 129)
 
     def test_pause_releases_sound_and_queued_previous_session_input_is_ignored(self):
         self.engine(1)

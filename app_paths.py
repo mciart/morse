@@ -20,7 +20,6 @@ _SOURCE_ROOT = Path(__file__).resolve().parent
 _SOURCE_SEEDS = {
     "layouts.json": "user_data/layouts.json",
     "abbreviations_en.txt": "user_data/abbreviations_en.txt",
-    "morsewriter.sqlite": "res/morsewriter.sqlite",
 }
 
 
@@ -129,14 +128,6 @@ def _migrate_abbreviations(directory, target):
         return
 
 
-def prediction_database(data_dir=None, *, resource_dir=None):
-    """Ensure pressagio learns into a writable copy, never the bundled seed."""
-    directory = Path(data_dir) if data_dir is not None else user_data_dir()
-    destination = directory / "morsewriter.sqlite"
-    _copy_missing(_seed_resource("morsewriter.sqlite", resource_dir), destination)
-    return destination.resolve()
-
-
 def bootstrap_assets(default_config, *, data_dir=None, resource_dir=None, legacy_dir=None):
     """Seed missing assets and return the writable data directory.
 
@@ -154,7 +145,6 @@ def bootstrap_assets(default_config, *, data_dir=None, resource_dir=None, legacy
 
     # Ensure all mandatory data before publishing a first-run config/marker.
     _copy_missing(_seed_resource("layouts.json", resource_dir), directory / "layouts.json")
-    prediction_database(directory, resource_dir=resource_dir)
     if migrated is not None:
         _migrate_abbreviations(legacy, directory / "abbreviations_en.txt")
     _copy_missing(_seed_resource("abbreviations_en.txt", resource_dir), directory / "abbreviations_en.txt")
