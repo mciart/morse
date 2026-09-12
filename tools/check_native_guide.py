@@ -297,8 +297,13 @@ def check_native(report, save_images=False):
             stages[-1].update(simulated_display_change=True, labels_fitting=assert_text_and_board_fit())
             assert view.compactScale() == requested_scale, 'DPI refresh changed the user scale preference'
             if factor > 1:
-                assert view.scroll_area.sceneRect().height() > initial_scene.height(), 'DPI metrics stayed cached'
-                assert view.height() > initial_size.height(), 'Larger font metrics did not resize compact window'
+                # At low DPI the minimum key height can still accommodate the
+                # larger text. Width alone may grow, which is correct too.
+                current_scene = view.scroll_area.sceneRect()
+                assert (current_scene.width() > initial_scene.width() or
+                        current_scene.height() > initial_scene.height()), 'DPI metrics stayed cached'
+                assert (view.width() > initial_size.width() or
+                        view.height() > initial_size.height()), 'Larger font metrics did not resize compact window'
             else:
                 assert view.scroll_area.sceneRect() == initial_scene and view.size() == initial_size, 'Restored metrics stayed enlarged'
         view.hide()

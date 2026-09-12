@@ -14,6 +14,20 @@ from PyQt5.QtWidgets import QApplication
 from app_paths import source_resource, user_data_dir
 
 
+def _assert_navigation_gap_transparent(view, image):
+    # The empty cell above Left and left of Up stays well clear of key edges.
+    # An outer corner can contain a rounded key's antialiasing after scaling.
+    board = view.scroll_area.board
+    left, up = (view.keystroke_crs_map[key] for key in ('LEFTARROW', 'UPARROW'))
+    left_center = left.mapTo(board, left.rect().center())
+    up_center = up.mapTo(board, up.rect().center())
+    scene_point = view.scroll_area.proxy.mapToScene(QPointF(left_center.x(), up_center.y()))
+    point = view.scroll_area.viewport().mapTo(view, view.scroll_area.mapFromScene(scene_point))
+    assert image.rect().contains(point), 'Navigation gap is outside the rendered guide'
+    assert image.pixelColor(point).alpha() == 0, 'Guide gaps are not transparent'
+    return point
+
+
 def verify_interface_features(window):
     """Render the real compact guide while its native window stays hidden."""
     view = window.codeslayoutview
@@ -53,7 +67,7 @@ def verify_interface_features(window):
         assert view.height() < geometry.height(), 'Compact guide did not shrink'
         assert all(widget.isHidden() for widget in
                    (view.header_widget, view.input_feedback, view.status_bar))
-        assert image.pixelColor(0, 0).alpha() == 0, 'Guide gaps are not transparent'
+        _assert_navigation_gap_transparent(view, image)
         cap = view.crs['12']  # A visible key must actually paint into the image.
         point = cap.mapTo(view.scroll_area.board, cap.rect().center())
         scene_point = proxy.mapToScene(QPointF(point))
@@ -85,7 +99,7 @@ def verify_interface_features(window):
             board = view.scroll_area.mapFromScene(bounds).boundingRect()
             assert abs(board.width() - view.width()) <= 2
             assert abs(board.height() - view.height()) <= 2
-            assert image.pixelColor(0, 0).alpha() == 0
+            _assert_navigation_gap_transparent(view, image)
             assert not view.isVisible(), 'Resizing must not reveal the hidden guide'
             resize_sizes.append([view.width(), view.height()])
             if requested_scale != 1.0:

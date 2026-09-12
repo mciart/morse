@@ -6,13 +6,35 @@ from unittest import TestCase
 from unittest.mock import patch
 
 import test_ui_behavior as ui
-from frozen_smoke import verify_interface_features
+from frozen_smoke import _assert_navigation_gap_transparent, verify_interface_features
+from PyQt5.QtGui import QColor, QImage
 
 
 class FrozenInterfaceProbeTests(TestCase):
     setUpClass = classmethod(ui.WindowBehaviorTests.setUpClass.__func__)
     setUp = ui.WindowBehaviorTests.setUp
     tearDown = ui.WindowBehaviorTests.tearDown
+
+    def test_gap_sample_ignores_corner_antialiasing_but_requires_zero_gap_alpha(self):
+        self.window.hide()
+        self.window._start_hidden = True
+        self.window.init()
+        view = self.window.codeslayoutview
+        self.views.append(view)
+        view.setCompactMode(True)
+        for scale in (0.8, 1.0):
+            with self.subTest(scale=scale):
+                view.setCompactScale(scale)
+                image = QImage(view.size(), QImage.Format_ARGB32_Premultiplied)
+                image.fill(ui.morse.Qt.transparent)
+                view.render(image)
+                # Native 300% DPI produces alpha 50 at this rounded corner.
+                image.setPixelColor(0, 0, QColor(0, 0, 0, 50))
+                point = _assert_navigation_gap_transparent(view, image)
+                self.assertNotEqual(point, ui.morse.QtCore.QPoint(0, 0))
+                image.setPixelColor(point, QColor(0, 0, 0, 1))
+                with self.assertRaisesRegex(AssertionError, 'gaps are not transparent'):
+                    _assert_navigation_gap_transparent(view, image)
 
     def test_compact_render_and_f22_preset_are_checked_without_native_integration(self):
         window = self.window
