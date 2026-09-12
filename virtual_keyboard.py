@@ -5,8 +5,8 @@ from html import escape
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFrame, QGraphicsScene, QGraphicsView, QGridLayout,
+    QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
 )
 
 from ui_theme import THEME_COLORS
@@ -26,6 +26,10 @@ class KeyCap(QFrame):
         self.label_override = label
         self.raw_code = item['code']
         self.code = morse(self.raw_code)
+        self.is_prediction = item.get('action') == 'PREDICTION_SELECT'
+        self.is_available = True
+        self._prefix_matches = True
+        self._candidate_text = ''
         self.disabledchars = 0
         self.is_enabled = True
         self.toggled = False
@@ -37,10 +41,15 @@ class KeyCap(QFrame):
         self.character = QLabel()
         self.character.setTextFormat(Qt.PlainText)
         self.character.setAlignment(Qt.AlignCenter)
+        if self.is_prediction:
+            self.character.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.codeline = QLabel()
         self.codeline.setAlignment(Qt.AlignCenter)
         self.codeline.setTextFormat(Qt.RichText)
         self.codeline.setWordWrap(False)
+        if compact == 'inline':
+            self.character.setMargin(2)
+            self.codeline.setMargin(2)
         content = QHBoxLayout(self) if compact == 'inline' else QVBoxLayout(self)
         content.setContentsMargins(5, 1, 5, 1) if compact else content.setContentsMargins(5, 3, 5, 4)
         content.setSpacing(1)
@@ -53,20 +62,27 @@ class KeyCap(QFrame):
     def item_label(self):
         action = self.item.get('_action')
         label = action.getlabel() if action is not None else self.item.get('label', self.item.get('action', ''))
-        if not label and self.item.get('action') == 'PREDICTION_SELECT':
-            return '候选 ' + str(self.item.get('target', 0) + 1)
-        return str(label)
+        return str(label) if label is not None else ''
 
     def updateView(self):
         colors = THEME_COLORS
         label = self.label_override if self.label_override is not None else self.item_label()
-        if self.config.get('upperchars', False) and len(label) == 1 and label in 'abcdefghijklmnopqrstuvwxyz':
+        self.is_available = bool(label) if self.is_prediction else True
+        self.is_enabled = self._prefix_matches and self.is_available
+        if self.is_prediction:
+            label = str(self.item.get('target', 0) + 1) + ' · ' + (label or '—')
+        elif (self.config.get('upperchars', False) and self.item.get('action') in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+              and len(self.item.get('action', '')) == 1 and len(label) == 1 and label in 'abcdefghijklmnopqrstuvwxyz'):
             label = label.upper()
         font = QFont(QApplication.font())
         font.setPointSizeF((8.7 if self.compact else 9.5) * self.scale)
         font.setBold(True)
         self.character.setFont(font)
-        self.character.setText(label)
+        if self.is_prediction:
+            self._candidate_text = label
+            self._elide_candidate_label()
+        else:
+            self.character.setText(label)
         code_font = QFont('Consolas')
         code_font.setPointSizeF((9.1 if self.compact else 10.0) * self.scale)
         self.codeline.setFont(code_font)
@@ -84,40 +100,67 @@ class KeyCap(QFrame):
             '<span style="color:%s">%s</span><span style="color:%s">%s</span>'
             % (colors['success'], escape(self.code[:prefix_len]), code_color, escape(self.code[prefix_len:]))
         )
-        tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
-                         else self.item_label())
+        if self.is_prediction:
+            tooltip_label = '候选 ' + str(self.item.get('target', 0) + 1) + '：'
+            tooltip_label += self.item_label() if self.is_available else '暂无可用词语\n该位置当前不能选择。'
+        else:
+            tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
+                             else self.item_label())
         self.setToolTip(tooltip_label + '\n' + self.code)
         # A seven-symbol code and translated key names must never be clipped.
-        if self.compact == 'inline':
+        if self.is_prediction:
+            minimum_width = self.codeline.sizeHint().width() + 12
+        elif self.compact == 'inline':
             minimum_width = self.codeline.sizeHint().width() + self.character.sizeHint().width() + 16
         else:
             minimum_width = max(self.codeline.sizeHint().width(), self.character.sizeHint().width()) + 12
         self.setMinimumWidth(max(round((58 if self.compact else 51) * self.scale), minimum_width))
+        label_heights = [max(widget.sizeHint().height(), widget.fontMetrics().height() + 2 * widget.margin())
+                         for widget in (self.character, self.codeline)]
+        for widget, height in zip((self.character, self.codeline), label_heights):
+            widget.setMinimumHeight(height)
+        margins = self.layout().contentsMargins()
+        padding_height = margins.top() + margins.bottom() + 2 * self.frameWidth()
+        if self.compact == 'inline':
+            content_height = max(label_heights) + padding_height
+        else:
+            content_height = sum(label_heights) + self.layout().spacing() + padding_height
+        self.setFixedHeight(max(round((26 if self.compact == 'inline' else 43 if self.compact else 51) * self.scale),
+                                content_height))
+
+    def _elide_candidate_label(self):
+        self.character.setText(self.character.fontMetrics().elidedText(
+            self._candidate_text, Qt.ElideRight, max(1, self.width() - 12)))
+
+    def resizeEvent(self, event):
+        if self.is_prediction:
+            self._elide_candidate_label()
+        super().resizeEvent(event)
 
     def enabled(self):
         return self.is_enabled
 
     def enable(self):
-        self.is_enabled = True
+        self._prefix_matches = True
         self.updateView()
 
     def disable(self):
-        self.is_enabled = False
+        self._prefix_matches = False
         self.updateView()
 
     def reset(self):
         self.disabledchars = 0
-        self.is_enabled = True
+        self._prefix_matches = True
         self.updateView()
 
     def _advance(self, symbol):
-        if self.is_enabled:
+        if self._prefix_matches:
             position = self.disabledchars
             if position < len(self.raw_code) and self.raw_code[position] == symbol:
                 self.disabledchars += 1
             else:
-                self.is_enabled = False
-            self.updateView()
+                self._prefix_matches = False
+        self.updateView()
 
     def Dit(self):
         self._advance('1')
@@ -141,11 +184,63 @@ class MouseShell(QFrame):
         painter.drawRoundedRect(center - 3, 13, 6, 22, 3, 3)
 
 
+class GuideViewport(QGraphicsView):
+    """Scale the complete guide as one surface, keeping host controls readable."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setScene(QGraphicsScene(self))
+        self.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.auto_fit = True
+        self.proxy = None
+
+    def setBoard(self, board):
+        self.board = board
+        self.proxy = self.scene().addWidget(board)
+        self.refreshLayout()
+
+    def refreshLayout(self):
+        if self.proxy is None:
+            return
+        self.board.ensurePolished()
+        self.board.layout().invalidate()
+        self.board.layout().activate()
+        size = self.board.layout().sizeHint().expandedTo(self.board.layout().minimumSize())
+        self.board.resize(size)
+        self.board.layout().activate()
+        self.setSceneRect(self.proxy.boundingRect())
+        self._fitBoard()
+
+    def setAutoFit(self, value):
+        self.auto_fit = bool(value)
+        policy = Qt.ScrollBarAlwaysOff if self.auto_fit else Qt.ScrollBarAsNeeded
+        self.setHorizontalScrollBarPolicy(policy)
+        self.setVerticalScrollBarPolicy(policy)
+        self._fitBoard()
+
+    def _fitBoard(self):
+        if self.proxy is None:
+            return
+        if self.auto_fit:
+            self.fitInView(self.sceneRect(), Qt.KeepAspectRatio)
+        else:
+            self.resetTransform()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fitBoard()
+
+
 class VirtualKeyboardView(QWidget):
     """All available desktop commands, arranged by physical position."""
 
     settingsRequested = pyqtSignal()
     changeLayoutSignal = pyqtSignal(str)
+    mouseVisibilityChanged = pyqtSignal(bool)
+    autoFitChanged = pyqtSignal(bool)
 
     DISPLAY_NAMES = {
         'ESCAPE': 'Esc', 'TAB': 'Tab', 'TABLEFT': 'Shift+Tab',
@@ -171,6 +266,8 @@ class VirtualKeyboardView(QWidget):
         self._locked = False
         self._prefix = ''
         self._section_titles = []
+        self._mouse_visible = bool(config.get('show_mouse', False))
+        self._auto_fit = bool(config.get('guide_auto_fit', True))
         self.setWindowTitle('摩斯输入 · 键盘与鼠标')
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint |
@@ -263,14 +360,27 @@ class VirtualKeyboardView(QWidget):
         self.settings_button = QPushButton('返回设置')
         self.settings_button.setToolTip('暂停输入并返回设置（Ctrl + Shift + P）')
         self.settings_button.clicked.connect(self.settingsRequested.emit)
+        self.view_options = QWidget()
+        options = QHBoxLayout(self.view_options)
+        options.setContentsMargins(0, 0, 0, 0)
+        options.setSpacing(12)
+        self.mouse_checkbox = QCheckBox('鼠标')
+        self.mouse_checkbox.setChecked(self._mouse_visible)
+        self.mouse_checkbox.setToolTip('显示鼠标按键和移动方向的对照表。')
+        self.mouse_checkbox.toggled.connect(self.setMouseVisible)
+        options.addWidget(self.mouse_checkbox)
+        self.auto_fit_checkbox = QCheckBox('适应窗口')
+        self.auto_fit_checkbox.setChecked(self._auto_fit)
+        self.auto_fit_checkbox.setToolTip('缩放完整对照表；关闭后按设置字号显示，并可滚动查看。')
+        self.auto_fit_checkbox.toggled.connect(self.setAutoFit)
+        options.addWidget(self.auto_fit_checkbox)
         self._compact_header = None
-        self._set_compact_header(self.width() < 640)
+        self._set_compact_header(self.width() < 760)
         outer.addLayout(self.header)
 
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setFrameShape(QFrame.NoFrame)
-        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area = GuideViewport()
         self.chart_widget = QWidget()
+        self.chart_widget.setObjectName('guideBoard')
         body = QHBoxLayout(self.chart_widget)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
@@ -335,11 +445,31 @@ class VirtualKeyboardView(QWidget):
         symbol_tools.setSpacing(5)
         symbol_tools.addLayout(extras)
         keyboard.addLayout(symbol_tools)
-        keyboard.addStretch()
+        tools = QHBoxLayout()
+        tools.setSpacing(5)
+        for action in ('STARTMENU', 'REPEATMODE', 'SOUND'):
+            cap = self._cap(action, compact=True)
+            if cap:
+                tools.addWidget(cap)
+        tools.addStretch(2)
+        keyboard.addLayout(tools)
         body.addLayout(keyboard, 3)
-        mouse = self._mouse_panel()
-        body.addLayout(mouse, 1)
-        self.scroll_area.setWidget(self.chart_widget)
+        self.mouse_panel = QWidget()
+        self.mouse_panel.setLayout(self._mouse_panel())
+        self.mouse_panel.layout().setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self.mouse_panel, 1)
+        self.mouse_panel.setVisible(self._mouse_visible)
+        remaining = [item for item in self._items if item['code'] not in self.crs]
+        if remaining:
+            keyboard.addWidget(self._title('其他操作'))
+            grid = QGridLayout()
+            grid.setSpacing(5)
+            for index, item in enumerate(remaining):
+                grid.addWidget(self._cap(item['action'], compact=True, item=item), index // 3, index % 3)
+            keyboard.addLayout(grid)
+        keyboard.addStretch()
+        self.scroll_area.setBoard(self.chart_widget)
+        self.scroll_area.setAutoFit(self._auto_fit)
         outer.addWidget(self.scroll_area, 1)
         self.status_bar = QStatusBar()
         self.status_bar.setSizeGripEnabled(False)
@@ -362,6 +492,7 @@ class VirtualKeyboardView(QWidget):
             half.setSpacing(4)
             label = QLabel(title)
             label.setAlignment(Qt.AlignCenter)
+            label.setMargin(2)
             half.addWidget(label)
             for prefix, label in [('MOUSECLICK', '单击'), ('MOUSEDBLCLICK', '双击'), ('MOUSECLKHLD', '按住')]:
                 cap = self._cap(prefix + suffix, label=label, compact='inline')
@@ -385,6 +516,7 @@ class VirtualKeyboardView(QWidget):
             cell.setSpacing(3)
             heading = QLabel(arrow + ' ' + title)
             heading.setAlignment(Qt.AlignCenter)
+            heading.setMargin(2)
             cell.addWidget(heading)
             for distance in (5, 40, 250):
                 cap = self._cap('MOUSE' + suffix + str(distance), label=str(distance), compact='inline')
@@ -396,22 +528,6 @@ class VirtualKeyboardView(QWidget):
         legend.setAlignment(Qt.AlignCenter)
         directions.addWidget(legend, 1, 1)
         panel.addLayout(directions)
-        tools = QHBoxLayout()
-        tools.setSpacing(5)
-        for action in ('STARTMENU', 'REPEATMODE', 'SOUND'):
-            cap = self._cap(action, compact=True)
-            if cap:
-                tools.addWidget(cap)
-        panel.addLayout(tools)
-        # Custom layouts can add commands without losing them in the spatial view.
-        remaining = [item for item in self._items if item['code'] not in self.crs]
-        if remaining:
-            panel.addWidget(self._title('其他操作'))
-            grid = QGridLayout()
-            grid.setSpacing(5)
-            for index, item in enumerate(remaining):
-                grid.addWidget(self._cap(item['action'], compact=True, item=item), index // 3, index % 3)
-            panel.addLayout(grid)
         panel.addStretch()
         return panel
 
@@ -423,9 +539,9 @@ class VirtualKeyboardView(QWidget):
         if compact == self._compact_header:
             return
         self._compact_header = compact
-        for widget in (self.heading, self.subtitle, self.input_label, self.settings_button):
+        for widget in (self.heading, self.subtitle, self.input_label, self.settings_button, self.view_options):
             self.header.removeWidget(widget)
-        for column in range(3):
+        for column in range(4):
             self.header.setColumnStretch(column, 0)
             self.header.setColumnMinimumWidth(column, 0)
         self.header.addWidget(self.heading, 0, 0)
@@ -434,16 +550,43 @@ class VirtualKeyboardView(QWidget):
             self.subtitle.hide()
             self.header.addWidget(self.settings_button, 0, 1)
             self.header.addWidget(self.input_label, 1, 0, 1, 2)
+            self.header.addWidget(self.view_options, 2, 0, 1, 2)
         else:
             self.subtitle.show()
-            self.header.addWidget(self.subtitle, 1, 0)
-            self.header.addWidget(self.input_label, 0, 1, 2, 1)
-            self.header.setColumnMinimumWidth(1, 150)
-            self.header.addWidget(self.settings_button, 0, 2, 2, 1)
+            self.header.addWidget(self.subtitle, 1, 0, 1, 2)
+            self.header.addWidget(self.view_options, 0, 1)
+            self.header.addWidget(self.input_label, 0, 2, 2, 1)
+            self.header.setColumnMinimumWidth(2, 150)
+            self.header.addWidget(self.settings_button, 0, 3, 2, 1)
 
     def resizeEvent(self, event):
-        self._set_compact_header(event.size().width() < 640)
+        self._set_compact_header(event.size().width() < 760)
         super().resizeEvent(event)
+
+    def setMouseVisible(self, value):
+        value = bool(value)
+        changed = value != self._mouse_visible
+        self._mouse_visible = value
+        self.config['show_mouse'] = value
+        self.mouse_checkbox.blockSignals(True)
+        self.mouse_checkbox.setChecked(value)
+        self.mouse_checkbox.blockSignals(False)
+        self.mouse_panel.setVisible(value)
+        self.scroll_area.refreshLayout()
+        if changed:
+            self.mouseVisibilityChanged.emit(value)
+
+    def setAutoFit(self, value):
+        value = bool(value)
+        changed = value != self._auto_fit
+        self._auto_fit = value
+        self.config['guide_auto_fit'] = value
+        self.auto_fit_checkbox.blockSignals(True)
+        self.auto_fit_checkbox.setChecked(value)
+        self.auto_fit_checkbox.blockSignals(False)
+        self.scroll_area.setAutoFit(value)
+        if changed:
+            self.autoFitChanged.emit(value)
 
     def setOutputState(self, held_modifiers, locked):
         self._held = tuple(held_modifiers)
@@ -487,14 +630,18 @@ class VirtualKeyboardView(QWidget):
     def updateTheme(self):
         colors = THEME_COLORS
         self.setStyleSheet(
-            'VirtualKeyboardView, QScrollArea, QScrollArea > QWidget > QWidget { background: %s; }'
+            'VirtualKeyboardView, QGraphicsView { background: %s; }'
             'QLabel#guideHint { color: %s; }'
             'QLabel#morseInput { background: %s; color: %s; border: 1px solid %s;'
             'border-radius: 7px; padding: 9px 15px; font-size: 17px; font-weight: bold; }'
             % (colors['background'], colors['muted'], colors['input'], colors['accent'], colors['border'])
         )
+        self.chart_widget.setStyleSheet(
+            'QWidget#guideBoard { background: %s; } QLabel#guideHint { color: %s; }'
+            % (colors['background'], colors['muted']))
         for cap in self.crs.values():
             cap.updateView()
+        self.scroll_area.refreshLayout()
         self.update()
 
     def closeEvent(self, event):

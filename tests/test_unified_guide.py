@@ -22,7 +22,7 @@ class UnifiedGuideTests(TestCase):
         self.select_page('desktop')
         self.app.processEvents()
 
-    def test_every_action_is_visible_and_keyboard_codes_are_preserved(self):
+    def test_every_action_is_registered_and_keyboard_codes_are_preserved(self):
         items = self.layout.get_active_layout()['items']
         view = self.window.codeslayoutview
         self.assertEqual(len(items), 137)
@@ -57,6 +57,7 @@ class UnifiedGuideTests(TestCase):
 
     def test_small_window_keeps_return_button_visible_and_scrolls_only_the_guide(self):
         view = self.window.codeslayoutview
+        view.setAutoFit(False)
         view.resize(360, 280)
         self.app.processEvents()
         self.assertEqual((view.width(), view.height()), (360, 280))
@@ -71,6 +72,114 @@ class UnifiedGuideTests(TestCase):
         self.assertEqual(button.mapTo(view, QPoint(0, 0)), button_rectangle.topLeft())
         self.assertTrue(button.isVisible())
 
+    def test_auto_fit_shows_the_whole_board_with_mouse_optional(self):
+        view = self.window.codeslayoutview
+        self.assertFalse(view.mouse_checkbox.isChecked())
+        self.assertTrue(view.mouse_panel.isHidden())
+        self.assertTrue(view.auto_fit_checkbox.isChecked())
+        caps = {cap.item['action']: cap for cap in view.crs.values()}
+        for action in ('STARTMENU', 'REPEATMODE', 'SOUND'):
+            self.assertTrue(caps[action].isVisible())
+        for show_mouse in (False, True):
+            view.setMouseVisible(show_mouse)
+            for size in ((1280, 780), (720, 460), (360, 280)):
+                view.resize(*size)
+                self.app.processEvents()
+                viewport = view.scroll_area
+                scene_bounds = viewport.mapFromScene(viewport.sceneRect()).boundingRect()
+                self.assertTrue(viewport.viewport().rect().contains(scene_bounds), (size, scene_bounds))
+                self.assertEqual(viewport.horizontalScrollBar().maximum(), 0)
+                self.assertEqual(viewport.verticalScrollBar().maximum(), 0)
+                self.assertTrue(view.settings_button.isVisible())
+            self.assertEqual(view.mouse_panel.isHidden(), not show_mouse)
+        self.assertEqual(len(view.crs), 137)
+
+    def test_view_options_emit_once_and_manual_size_uses_no_transform(self):
+        view = self.window.codeslayoutview
+        mouse_changes, fit_changes = [], []
+        view.mouseVisibilityChanged.connect(mouse_changes.append)
+        view.mouseVisibilityChanged.connect(view.setMouseVisible)
+        view.autoFitChanged.connect(fit_changes.append)
+        view.autoFitChanged.connect(view.setAutoFit)
+        view.mouse_checkbox.setChecked(True)
+        view.auto_fit_checkbox.setChecked(False)
+        self.app.processEvents()
+        self.assertEqual(mouse_changes, [True])
+        self.assertEqual(fit_changes, [False])
+        self.assertTrue(view.scroll_area.transform().isIdentity())
+        self.assertTrue(view.config['show_mouse'])
+        self.assertFalse(view.config['guide_auto_fit'])
+
+    def test_mouse_text_has_vertical_room_for_native_font_metrics(self):
+        view = self.window.codeslayoutview
+        view.setMouseVisible(True)
+        self.app.processEvents()
+        for cap in view.crs.values():
+            if cap.item['action'].startswith('MOUSE'):
+                for label in (cap.character, cap.codeline):
+                    self.assertGreaterEqual(label.height(), label.fontMetrics().height() + 4)
+                    self.assertGreaterEqual(label.height(), label.sizeHint().height())
+        headings = [label for label in view.mouse_panel.findChildren(morse.QLabel)
+                    if label.text().startswith(('↖', '↑', '↗', '←', '→', '↙', '↓', '↘'))]
+        self.assertEqual(len(headings), 8)
+        for heading in headings:
+            self.assertGreaterEqual(heading.height(), heading.fontMetrics().height() + 4)
+
+    def test_candidate_slots_keep_numbers_case_and_live_availability(self):
+        view = self.window.codeslayoutview
+        view.resize(1280, 780)
+        self.app.processEvents()
+        view.config['upperchars'] = True
+        candidates = sorted((cap for cap in view.crs.values() if cap.is_prediction),
+                            key=lambda cap: cap.item['target'])
+        with patch.object(self.window.typestate, 'getpredictions', return_value=[]) as predictions:
+            view.reset()
+            self.assertEqual([cap.character.text() for cap in candidates],
+                             [str(number) + ' · —' for number in range(1, 9)])
+            self.assertTrue(all(not cap.enabled() for cap in candidates))
+            self.assertIn('当前不能选择', candidates[5].toolTip())
+            predictions.return_value = ['the', 'a']
+            view.setOutputState((), False)
+            self.assertEqual(candidates[0].character.text(), '1 · the')
+            self.assertEqual(candidates[1].character.text(), '2 · a')
+            self.assertEqual([cap.enabled() for cap in candidates], [True, True] + [False] * 6)
+            view.Dah()
+            view.Dah()
+            predictions.return_value = ['of']
+            view.setOutputState((), False)
+            self.assertTrue(candidates[0].enabled())
+            self.assertEqual(candidates[0].disabledchars, 2)
+            self.assertEqual(candidates[0].character.text(), '1 · of')
+            self.assertFalse(candidates[1].enabled())
+            predictions.return_value = ['of', 'a']
+            view.setOutputState((), False)
+            self.assertTrue(candidates[1].enabled())
+            self.assertEqual(candidates[1].disabledchars, 2)
+            view.reset()
+            view.Dit()
+            predictions.return_value = ['a']
+            view.setOutputState((), False)
+            self.assertFalse(candidates[0].enabled())
+            view.reset()
+            self.assertTrue(candidates[0].enabled())
+        self.assertEqual(len(view.crs), 137)
+
+    def test_long_candidates_are_elided_without_expanding_the_guide(self):
+        view = self.window.codeslayoutview
+        view.resize(1280, 780)
+        self.app.processEvents()
+        original_width = view.chart_widget.width()
+        original_scroll_range = view.scroll_area.horizontalScrollBar().maximum()
+        cap = next(cap for cap in view.crs.values() if cap.is_prediction and cap.item['target'] == 0)
+        word = 'longcandidate' * 30
+        with patch.object(self.window.typestate, 'getpredictions', return_value=[word]):
+            view.reset()
+            self.app.processEvents()
+            self.assertTrue(cap.character.text().startswith('1 · '))
+            self.assertTrue(cap.character.text().endswith('…'))
+            self.assertIn(word, cap.toolTip())
+            self.assertEqual(view.chart_widget.width(), original_width)
+            self.assertEqual(view.scroll_area.horizontalScrollBar().maximum(), original_scroll_range)
     def test_keyboard_and_mouse_execute_without_switching_layout(self):
         listener = self.window.listenerThread
         actions = {item['action']: item['code'] for item in self.layout.get_active_layout()['items']}

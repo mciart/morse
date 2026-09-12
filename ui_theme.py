@@ -52,6 +52,82 @@ def _remember_system_palette(app):
         app._morse_system_palette = QPalette(app.palette())
 
 
+def _windows_ui_font():
+    """Read the actual Windows message font in points, independent of DPI."""
+    import ctypes
+    from ctypes import wintypes
+
+    class LogFont(ctypes.Structure):
+        _fields_ = [
+            (name, wintypes.LONG) for name in
+            ("height", "width", "escapement", "orientation", "weight")
+        ] + [
+            (name, wintypes.BYTE) for name in
+            ("italic", "underline", "strike_out", "charset", "out_precision",
+             "clip_precision", "quality", "pitch_and_family")
+        ] + [("face_name", wintypes.WCHAR * 32)]
+
+    class NonClientMetrics(ctypes.Structure):
+        _fields_ = [
+            ("size", wintypes.UINT),
+            ("border_width", ctypes.c_int),
+            ("scroll_width", ctypes.c_int),
+            ("scroll_height", ctypes.c_int),
+            ("caption_width", ctypes.c_int),
+            ("caption_height", ctypes.c_int),
+            ("caption_font", LogFont),
+            ("small_caption_width", ctypes.c_int),
+            ("small_caption_height", ctypes.c_int),
+            ("small_caption_font", LogFont),
+            ("menu_width", ctypes.c_int),
+            ("menu_height", ctypes.c_int),
+            ("menu_font", LogFont),
+            ("status_font", LogFont),
+            ("message_font", LogFont),
+            ("padded_border_width", ctypes.c_int),
+        ]
+
+    try:
+        metrics = NonClientMetrics()
+        metrics.size = ctypes.sizeof(metrics)
+        read_metrics = ctypes.windll.user32.SystemParametersInfoForDpi
+        read_metrics.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+                                 wintypes.UINT, wintypes.UINT]
+        read_metrics.restype = wintypes.BOOL
+        if not read_metrics(0x0029, metrics.size, ctypes.byref(metrics), 0, 96):
+            return None
+        native = metrics.message_font
+        if native.height == 0:
+            return None
+        font = QFont(native.face_name)
+        font.setPointSizeF(abs(native.height) * 72.0 / 96.0)
+        font.setWeight(QFont.Bold if native.weight >= 600 else QFont.Normal)
+        font.setItalic(bool(native.italic))
+        return font
+    except (AttributeError, OSError):
+        return None
+
+
+def _apply_ui_font(app):
+    if not hasattr(app, "_morse_ui_font"):
+        # Qt 5 can report a fallback font (e.g. SimSun 18 pt) even when the
+        # Windows message font is 9 pt. Use the native font, then let Qt apply
+        # the screen's DPI once. Theme changes must reuse this stable snapshot.
+        font = _windows_ui_font() if sys.platform == "win32" else None
+        if font is None:
+            font = QFont(app.font())
+        available = set(QFontDatabase().families())
+        for family in (
+            "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+            "Noto Sans CJK SC", "WenQuanYi Micro Hei",
+        ):
+            if family in available:
+                font.setFamily(family)
+                break
+        app._morse_ui_font = QFont(font)
+    app.setFont(QFont(app._morse_ui_font))
+
+
 def detect_system_theme(app=None):
     """Read Windows' app preference, falling back to the native Qt palette."""
     if sys.platform == "win32":
@@ -116,17 +192,7 @@ def apply_theme(app, mode="system"):
     palette.setColor(QPalette.Disabled, QPalette.HighlightedText, QColor(colors["muted"]))
     app.setPalette(palette)
 
-    # Keep the system's font size; prefer a family that renders Chinese clearly.
-    available = set(QFontDatabase().families())
-    for family in (
-        "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
-        "Noto Sans CJK SC", "WenQuanYi Micro Hei",
-    ):
-        if family in available:
-            font = QFont(app.font())
-            font.setFamily(family)
-            app.setFont(font)
-            break
+    _apply_ui_font(app)
 
     app.setStyleSheet("""
         QLabel, QGroupBox, QRadioButton, QCheckBox {

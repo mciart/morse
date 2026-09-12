@@ -68,6 +68,8 @@ typestate = None
 DEFAULT_CONFIG = {
   "theme": "system",
   "guide_layout": "desktop",
+  "guide_auto_fit": True,
+  "show_mouse": False,
   "keylen": 1,
   "keyone": "SPACE",
   "keytwo": "ENTER",
@@ -434,9 +436,11 @@ class TypeState(pressagio.callback.Callback):
         self.keyLength = 0
 
     def past_stream (self):
-        return self.text
+        # The dependency's reverse tokenizer cannot advance past a separator
+        # at index zero. Keep output text intact and trim only prediction input.
+        return self.text.lstrip(pressagio.character.blankspaces + pressagio.character.separators)
     def future_stream (self):
-        return self.text
+        return ""
     def pushchar (self, char):
         self.text += char
         self.predictions = None
@@ -1003,6 +1007,9 @@ class Window(QDialog):
         view.setAvailableLayouts(self.layoutManager.layouts, self.layoutManager.active_layout_name)
         view.changeLayoutSignal.connect(self.changeLayout)
         view.settingsRequested.connect(self.backToSettings)
+        if isinstance(view, VirtualKeyboardView):
+            view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
+            view.autoFitChanged.connect(self.changeGuideAutoFit)
         self.updateOutputState()
         view.show()
 
@@ -1017,6 +1024,22 @@ class Window(QDialog):
         self.config['theme'] = mode
         self.configManager.config['theme'] = mode
         QApplication.instance().theme_manager.set_mode(mode)
+        self.configManager.save_config(self.configManager.config)
+
+    def changeMouseVisibility(self, visible):
+        self.config['show_mouse'] = bool(visible)
+        self.configManager.config['show_mouse'] = bool(visible)
+        self.showMouseCheckBox.setChecked(bool(visible))
+        if isinstance(self.codeslayoutview, VirtualKeyboardView):
+            self.codeslayoutview.setMouseVisible(bool(visible))
+        self.configManager.save_config(self.configManager.config)
+
+    def changeGuideAutoFit(self, enabled):
+        self.config['guide_auto_fit'] = bool(enabled)
+        self.configManager.config['guide_auto_fit'] = bool(enabled)
+        self.guideAutoFitCheckBox.setChecked(bool(enabled))
+        if isinstance(self.codeslayoutview, VirtualKeyboardView):
+            self.codeslayoutview.setAutoFit(bool(enabled))
         self.configManager.save_config(self.configManager.config)
 
     def updateOutputState(self):
@@ -1042,7 +1065,8 @@ class Window(QDialog):
             return
         self.key_output.reset()
         self.repeaton = False
-        suffix = self.typestate.text.split()[-1] if self.typestate.text and not self.typestate.text[-1].isspace() else ''
+        # Match the predictor's word boundary, preserving preceding punctuation.
+        suffix = pressagio.tokenizer.ReverseTokenizer(self.typestate.text).next_token()
         for _ in suffix:
             self.key_output.send('backspace', '\b')
             self.typestate.popchar()
@@ -1060,6 +1084,8 @@ class Window(QDialog):
         config = {
             'theme': self.themeComboBox.currentData(),
             'guide_layout': self.guideLayoutComboBox.currentData(),
+            'show_mouse': self.showMouseCheckBox.isChecked(),
+            'guide_auto_fit': self.guideAutoFitCheckBox.isChecked(),
             'keylen': self.keySelectionRadioOneKey.isChecked() and 1 or self.keySelectionRadioTwoKey.isChecked() and 2 or 3,
             'keyone': self.iconComboBoxKeyOne.itemData(self.iconComboBoxKeyOne.currentIndex()),
             'keytwo': self.iconComboBoxKeyTwo.itemData(self.iconComboBoxKeyTwo.currentIndex()),
@@ -1257,6 +1283,17 @@ class Window(QDialog):
         self.guideLayoutComboBox.setToolTip('统一面板中可直接输入键盘与鼠标编码；兼容选项保留旧版短码。')
         appearance.addWidget(self.guideLayoutComboBox, 1, 1)
         inputSettingsLayout.addLayout(appearance)
+        guide_options = QHBoxLayout()
+        self.guideAutoFitCheckBox = QCheckBox('码表自动适应窗口')
+        self.guideAutoFitCheckBox.setChecked(self.config.get('guide_auto_fit', True))
+        self.guideAutoFitCheckBox.clicked.connect(self.changeGuideAutoFit)
+        guide_options.addWidget(self.guideAutoFitCheckBox)
+        self.showMouseCheckBox = QCheckBox('显示鼠标对照')
+        self.showMouseCheckBox.setChecked(self.config.get('show_mouse', False))
+        self.showMouseCheckBox.clicked.connect(self.changeMouseVisibility)
+        guide_options.addWidget(self.showMouseCheckBox)
+        inputSettingsLayout.addLayout(guide_options)
+        self.fontSizeScaleEdit.setToolTip('关闭“码表自动适应窗口”后，可按此比例查看键位。')
 
         self.iconComboBoxSoundDit = self.mkKeyStrokeComboBox([
                 ["点音", "res/dit_sound.wav"],  # Ensure the path is correct

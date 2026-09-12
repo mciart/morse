@@ -130,6 +130,21 @@ class WindowBehaviorTests(unittest.TestCase):
             self.assertEqual(json.load(stream), self.window.collect_config())
         self.start_input()
 
+    def test_guide_options_default_to_fit_without_mouse_and_persist_changes(self):
+        self.assertTrue(self.window.guideAutoFitCheckBox.isChecked())
+        self.assertFalse(self.window.showMouseCheckBox.isChecked())
+        view, _ = self.start_input()
+        self.assertFalse(view.mouse_checkbox.isChecked())
+        self.assertTrue(view.auto_fit_checkbox.isChecked())
+        view.mouse_checkbox.click()
+        view.auto_fit_checkbox.click()
+        self.assertTrue(self.window.showMouseCheckBox.isChecked())
+        self.assertFalse(self.window.guideAutoFitCheckBox.isChecked())
+        with open(self.window.configManager.config_file, encoding='utf-8') as stream:
+            saved = json.load(stream)
+        self.assertTrue(saved['show_mouse'])
+        self.assertFalse(saved['guide_auto_fit'])
+
     def test_code_close_and_tray_restore_preserve_active_input(self):
         view, listener = self.start_input()
         timers = self.add_pending_input()

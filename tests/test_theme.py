@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QApplication
 
@@ -27,6 +27,8 @@ class ThemeTests(unittest.TestCase):
         self.original_style = self.app.styleSheet()
         self.original_colors = dict(ui_theme.THEME_COLORS)
         self.original_resolved_theme = self.app.property("resolvedTheme")
+        self.original_font = QFont(self.app.font())
+        self.original_ui_font = QFont(self.app._morse_ui_font)
         self.manager = None
 
     def tearDown(self):
@@ -36,6 +38,8 @@ class ThemeTests(unittest.TestCase):
         self.app.setPalette(self.original_palette)
         self.app.setStyleSheet(self.original_style)
         self.app.setProperty("resolvedTheme", self.original_resolved_theme)
+        self.app._morse_ui_font = self.original_ui_font
+        self.app.setFont(self.original_font)
         ui_theme.THEME_COLORS.clear()
         ui_theme.THEME_COLORS.update(self.original_colors)
 
@@ -121,6 +125,31 @@ class ThemeTests(unittest.TestCase):
                 patch.object(ui_theme.sys, "platform", "linux"):
             self.assertEqual(ui_theme.detect_system_theme(self.app), "dark")
             self.assertEqual(ui_theme.apply_theme(self.app), "dark")
+
+    def test_windows_font_uses_native_size_instead_of_qt_fallback(self):
+        del self.app._morse_ui_font
+        self.app.setFont(QFont("SimSun", 18))
+        native = QFont("Microsoft YaHei UI", 9)
+        with patch.object(ui_theme.sys, "platform", "win32"), \
+                patch("ui_theme._windows_ui_font", return_value=native) as read_font:
+            ui_theme.apply_theme(self.app, "light")
+            self.assertEqual(self.app.font().pointSizeF(), 9.0)
+            for mode in ("dark", "light", "dark", "light"):
+                # A theme switch cannot turn a changed application font into
+                # the next theme's baseline and compound its size.
+                self.app.setFont(QFont("SimSun", 18))
+                ui_theme.apply_theme(self.app, mode)
+                self.assertEqual(self.app.font().pointSizeF(), 9.0)
+                self.assertEqual(self.app.font().pixelSize(), -1)
+            read_font.assert_called_once_with()
+
+    def test_non_windows_font_keeps_original_point_size(self):
+        del self.app._morse_ui_font
+        self.app.setFont(QFont("Sans Serif", 11))
+        with patch.object(ui_theme.sys, "platform", "linux"):
+            ui_theme.apply_theme(self.app, "light")
+            ui_theme.apply_theme(self.app, "dark")
+            self.assertEqual(self.app.font().pointSizeF(), 11.0)
 
 
 if __name__ == "__main__":
