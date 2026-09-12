@@ -151,7 +151,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             endCharacterTimer=Mock(), fast_morse_mode_timer=Mock(),
             repeat_character_timer=Mock(), currentCharacter=[1, 2],
             lastKeyDownTime=123, repeaton=True, showNormal=Mock(),
-            onOffAction=Mock(),
+            onOffAction=Mock(), updateTrayInputState=Mock(), goForIt=Mock(),
             key_output=Mock(), updateOutputState=Mock(),
             get_configured_keys=Mock(return_value=["space"]),
             on_press=Mock(), on_release=Mock(),
@@ -194,7 +194,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             self.assertEqual(window.engine.key.call_args_list, [
                 call(0, True, ANY), call(0, False, ANY)])
 
-    def test_returning_to_settings_ignores_queued_events_and_onoff(self):
+    def test_returning_to_settings_ignores_queued_events_and_tray_can_restart(self):
         window = self.make_window()
         view = window.codeslayoutview
         morse.Window.backToSettings(window)
@@ -208,6 +208,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
         with patch.object(morse, "KeyListenerThread") as listener_class:
             morse.Window.toggleOnOff(window)
         listener_class.assert_not_called()
+        window.goForIt.assert_called_once_with()
 
 
 if __name__ == "__main__":

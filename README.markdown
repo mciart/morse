@@ -18,7 +18,10 @@
 
 ## 快速开始
 
-安装 Python 3 和 Git，在 PowerShell 中执行：
+Windows 10 / 11 的 64 位用户可直接下载 [最新版安装包](https://github.com/mciart/morse/releases/latest)，运行 `MorseWriter-Setup-v版本号-x64.exe`。安装向导为简体中文，无需另装 Python，默认安装到当前用户目录；首次启动的界面主题跟随系统。
+
+需要从源码运行时，安装 Python 3 和 Git，在 PowerShell 中执行：
+
 
 ```powershell
 git clone https://github.com/mciart/morse.git
@@ -104,9 +107,18 @@ Windows 下也可选择“鼠标 X1（侧键）”和“鼠标 X2（侧键）”
 - 点击最小化按钮：窗口缩到任务栏，继续接收摩斯输入。
 - 点击 ×：隐藏到系统托盘，继续接收摩斯输入；不占用任务栏窗口按钮。Windows 决定托盘图标直接显示在右下角，还是收在“显示隐藏的图标”箭头中。
 - 点击托盘图标或选择“显示窗口”：恢复窗口。
-- “暂停输入”与“继续输入”：停用或恢复摩斯输入；暂停时释放程序按住的修饰键。
+- 托盘菜单的“启用输入”带勾表示正在接收输入；取消勾选即暂停并释放程序按住的修饰键，再次勾选则继续。尚未开始输入时，勾选可按当前设置开始。
 - “打开设置”或面板上的“返回设置”：停止输入并修改配置。码表窗口获得焦点时也可按 `Ctrl+Shift+P` 返回设置。
 - “退出”：关闭程序并释放键盘监听及修饰键。
+
+### 开机自启与快捷键
+
+- 在“启动与快捷键”中勾选“开机自启，并收进系统托盘”，登录 Windows 后程序会自动运行，设置和码表都不会弹出。此选项立即生效，取消勾选即可关闭自启。
+- 如需开机后直接接收摩斯输入，再勾选“启动后自动开始输入”并保存；否则程序只驻留托盘，等待手动开启输入。
+- **Ctrl+Alt+Shift+M** 默认切换码表显示／隐藏，隐藏时继续输入；尚未开始输入时切换设置窗口。可在设置中录入其他组合键并点击“应用”，也可关闭快捷键。与其他软件冲突时，设置中会显示失败原因。
+- 安装时也可选择开机自启，它与软件中的选项共用同一项 Windows 设置。卸载时移除自启，保留个人配置。
+
+安装版配置和学习词库位于 `%LOCALAPPDATA%\MorseWriter\user_data`，与程序目录分离，升级不会覆盖已有偏好。首次迁移旧版时只导入已有设置和缩写；新用户默认跟随系统主题。源码版仍使用项目的 `user_data`。
 
 ## 开发
 
@@ -117,6 +129,8 @@ Windows 下也可选择“鼠标 X1（侧键）”和“鼠标 X2（侧键）”
 | `MorseCodeGUI.py` | 设置、配置迁移、窗口及输入输出协调 |
 | `morse_engine.py` | 使用单调时间的纯 Python 点划状态机、按键记忆及字符确认 |
 | `input_listener.py` | 选定键的监听与拦截、带时间戳的事件、Windows X1 / X2 原生监听 |
+| `windows_integration.py` | 当前用户开机自启、Windows 原生全局快捷键与注册清理 |
+| `app_paths.py` | 打包资源定位、首次启动配置及可写学习词库 |
 | `tone_audio.py` | 连续音频合成、渐入渐出、输出设备及音频对象生命周期 |
 | `virtual_keyboard.py`、`ui_theme.py` | 虚拟码表、反馈、自动缩放和系统主题／原生标题栏 |
 | `keyboard_output.py` | 键盘动作、精确文字输出及修饰键状态 |
@@ -143,10 +157,15 @@ Remove-Item Env:QT_QPA_PLATFORM
 打包 Windows 程序：
 
 ```powershell
-.\.venv\Scripts\python.exe -m PyInstaller --clean MorseCodeGUI.spec
+.\build.ps1 -BootstrapCompiler
+.\tools\check_frozen_build.ps1
 ```
 
-构建结果位于 `dist` 目录。问题反馈和改进建议请提交到 [本仓库](https://github.com/mciart/morse)。
+构建脚本运行回归检查、校验资源清单、生成程序和中文 Inno Setup 安装包。`-BootstrapCompiler` 会将固定版本的官方编译器解包到项目 `build/tools`，不安装全局编译器；也可用 `-Iscc` 指定已有编译器。
+
+构建结果及 SHA256 校验文件位于 `dist`。安装包不包含开发者配置、日志或个人学习数据。发布工作流在版本标签对应提交上重新验证、构建和检查安装内容，再发布 GitHub Release；不依赖外部组织的签名服务器。当前安装包未进行代码签名。
+
+问题反馈和改进建议请提交到 [本仓库](https://github.com/mciart/morse)。
 
 ## 许可证与致谢
 

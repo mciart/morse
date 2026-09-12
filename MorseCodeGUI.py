@@ -16,11 +16,11 @@ from threading import Thread
 from PyQt5 import QtCore
 from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio
 from PyQt5.QtCore import QIODevice, QFile, QThread, pyqtSignal, QTimer, Qt, QObject, QLocale, QTranslator, QLibraryInfo
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout, QSpinBox,
                              QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPushButton, QRadioButton, QSystemTrayIcon, QVBoxLayout,
-                             QWidget, QApplication, QMenu, QFileDialog, QStatusBar, QScrollArea)
+                             QWidget, QApplication, QMenu, QFileDialog, QStatusBar, QScrollArea, QKeySequenceEdit)
 import keyboard
 import mouse
 # Local application/library specific imports
@@ -33,22 +33,15 @@ from virtual_keyboard import VirtualKeyboardView
 from morse_engine import MorseEngine
 from input_listener import KeyListenerThread
 from tone_audio import ToneAudio
+from windows_integration import StartupRegistration, GlobalHotkey, parse_hotkey, DEFAULT_GLOBAL_HOTKEY
+from app_paths import source_resource, bootstrap_assets, prediction_database
+from app_paths import user_data_dir as writable_user_data_dir
 
 def get_user_data_dir(app_name="MorseWriter"):
     """
     Returns the appropriate directory for storing user data based on the OS and whether the app is frozen.
     """
-    if hasattr(sys, 'frozen'):
-        # If the application is frozen, use the appropriate platform-specific directory
-        if platform.system() == 'Windows':
-            return os.path.join('C:\\', 'Users', 'Public', 'Documents', 'Ace Centre', app_name, 'user_data')
-        elif platform.system() == 'Darwin':
-            return os.path.join(os.path.expanduser('~/Library/Application Support/'), app_name, 'user_data')
-        else:
-            return os.path.join(os.path.expanduser('~/.config/'), app_name, 'user_data')
-    else:
-        # Use a local directory when running in development
-        return os.path.join(os.path.dirname(os.path.realpath(__file__)), 'user_data')
+    return str(writable_user_data_dir(app_name))
 
 
 # Logging is installed by the executable; importing the UI never overwrites logs.
@@ -91,6 +84,7 @@ DEFAULT_CONFIG = {
   "fontsizescale": 100,
   "upperchars": True,
   "autostart": False,
+  "guide_hotkey": DEFAULT_GLOBAL_HOTKEY,
   "winxaxis": "left",
   "winyaxis": "top",
   "winposx": 10,
@@ -404,12 +398,12 @@ class TypeState(pressagio.callback.Callback):
         self.text = ""
         self.predictions = None
 
-        pressagioconfig_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), "res",
-                                            "morsewriter_pressagio.ini")
+        pressagioconfig_file = str(source_resource('res', 'morsewriter_pressagio.ini'))
         logging.debug(f"[TypeState] Searching for pressagio config file with name: {pressagioconfig_file}")
 
         pressagioconfig = configparser.ConfigParser()
         pressagioconfig.read(pressagioconfig_file)
+        pressagioconfig.set('Database', 'database', str(prediction_database(get_user_data_dir())))
 
         database = pressagioconfig.get("Database", "database")
         logging.debug(f"[TypeState] Searching for database file: {database}")
@@ -810,6 +804,13 @@ class Window(QDialog):
         self.repeaton = False
 
         self._shutting_down = False
+        self._start_hidden = False
+        self._desktop_integration_started = False
+        self.startup_registration = StartupRegistration()
+        self.guide_hotkey = GlobalHotkey(self)
+        self.guide_hotkey.activated.connect(self.toggleGuideVisibility)
+        self.guide_hotkey.error.connect(self.hotkeyError)
+        self.guide_hotkey.ready.connect(self.hotkeyReady)
         self.engine = MorseEngine(self.config)
         self.engine_timer = QTimer(self)
         self.engine_timer.setTimerType(Qt.PreciseTimer)
@@ -884,6 +885,7 @@ class Window(QDialog):
         self.setLayout(mainLayout)
         self.setIcon()
         self.trayIcon.show()
+        self.updateTrayInputState()
         self.setWindowTitle("摩斯输入设置")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.setMinimumSize(320, 240)
@@ -930,6 +932,7 @@ class Window(QDialog):
             self.listenerThread.listenerError.connect(self.inputError)
             self.listenerThread.start()
             self.engine_timer.start()
+        self.updateTrayInputState()
 
 
     def updateAudioProperties(self):
@@ -1007,7 +1010,8 @@ class Window(QDialog):
             view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
             view.autoFitChanged.connect(self.changeGuideAutoFit)
         self.updateOutputState()
-        view.show()
+        if not self._start_hidden:
+            view.show()
 
     def refreshTheme(self, _resolved=None):
         if self.codeslayoutview is not None:
@@ -1097,6 +1101,7 @@ class Window(QDialog):
             'off': False,
             'fontsizescale': self.fontSizeScaleEdit.value(),
             'autostart': self.autostartCheckbox.isChecked(),
+            'guide_hotkey': self.selectedGuideHotkey(),
             'fastMorseMode': self.fastMorseModeCheckbox.isChecked() if self.keySelectionRadioOneKey.isChecked() is False else False,
         }
         return config
@@ -1119,10 +1124,10 @@ class Window(QDialog):
             return
         self.hide()
         self.config['guide_layout'] = 'desktop'
-        self.onOffAction.setText("暂停输入")
         self.init()
         if not self.listenerThread:
             self.startKeyListener()
+        self.applyGuideHotkey()
 
     def start (self):
         self.init()
@@ -1143,7 +1148,7 @@ class Window(QDialog):
         if self._shutting_down:
             return
         self._shutting_down = True
-        for cleanup in (self.stopIt, self.closePrediction, self.resetOutput, self.audio.shutdown):
+        for cleanup in (self.guide_hotkey.stop, self.stopIt, self.closePrediction, self.resetOutput, self.audio.shutdown):
             try:
                 cleanup()
             except Exception:
@@ -1174,6 +1179,73 @@ class Window(QDialog):
         target.showNormal()
         target.raise_()
         target.activateWindow()
+
+    def toggleGuideVisibility(self):
+        target = self.codeslayoutview if self.codeslayoutview is not None else self
+        if target.isVisible() and not target.isMinimized():
+            target.hide()
+        else:
+            self.showCurrentWindow()
+
+    def startDesktopIntegration(self):
+        self._desktop_integration_started = True
+        self.applyGuideHotkey()
+
+    def selectedGuideHotkey(self):
+        if not self.hotkeyEnabledCheck.isChecked():
+            return ''
+        sequence = self.hotkeyEdit.keySequence().toString(QKeySequence.PortableText)
+        canonical, _modifiers, _key = parse_hotkey(sequence)
+        return canonical
+
+    def applyGuideHotkey(self):
+        if self._desktop_integration_started:
+            self.guide_hotkey.set_sequence(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY))
+
+    def saveGuideHotkey(self):
+        try:
+            sequence = self.selectedGuideHotkey()
+        except ValueError as error:
+            self.hotkeyError(str(error))
+            return
+        self.config['guide_hotkey'] = sequence
+        self.configManager.config['guide_hotkey'] = sequence
+        self.configManager.save_config(self.configManager.config)
+        self.applyGuideHotkey()
+        if not sequence:
+            self.hotkeyStatus.setText('快捷键已关闭')
+
+    def hotkeyError(self, message):
+        logging.warning('Guide hotkey: %s', message)
+        if hasattr(self, 'hotkeyStatus'):
+            self.hotkeyStatus.setText(message)
+
+    def hotkeyReady(self, sequence):
+        self.hotkeyStatus.setText('已启用：' + sequence if sequence else '快捷键已关闭')
+
+    def changeStartupRegistration(self, enabled):
+        try:
+            self.startup_registration.set_enabled(bool(enabled))
+        except (OSError, RuntimeError, ValueError) as error:
+            self.startupCheckbox.setChecked(not enabled)
+            QMessageBox.warning(self, '开机自启设置失败', str(error))
+
+    def presentAtLaunch(self, startup=False):
+        self._start_hidden = bool(startup)
+        try:
+            if self.config.get('autostart', False):
+                self.start()
+            elif not startup:
+                self.show()
+        finally:
+            self._start_hidden = False
+
+    def updateTrayInputState(self):
+        if hasattr(self, 'onOffAction'):
+            active = self.listenerThread is not None and not self.config.get('off', False)
+            self.onOffAction.setChecked(active)
+            if hasattr(self, 'trayIcon'):
+                self.trayIcon.setToolTip('摩斯输入 · ' + ('输入已开启' if active else '输入已暂停'))
 
     def mkKeyStrokeComboBox (self, items, currentkey, valuedict=None):
         box = QComboBox()
@@ -1356,9 +1428,40 @@ class Window(QDialog):
         self.updateGuideScaleAvailability()
         inputSettingsLayout.addWidget(appearance_group)
 
+        startup_group = QGroupBox('启动与快捷键')
+        startup_layout = QVBoxLayout(startup_group)
+        self.startupCheckbox = QCheckBox('开机自启，并收进系统托盘')
+        self.startupCheckbox.setEnabled(self.startup_registration.supported)
+        try:
+            self.startupCheckbox.setChecked(self.startup_registration.is_enabled())
+        except (OSError, RuntimeError) as error:
+            logging.warning('Startup registration: %s', error)
+            self.startupCheckbox.setEnabled(False)
+            self.startupCheckbox.setToolTip(str(error))
+        self.startupCheckbox.clicked.connect(self.changeStartupRegistration)
+        startup_layout.addWidget(self.startupCheckbox)
         self.autostartCheckbox = QCheckBox('启动后自动开始输入')
         self.autostartCheckbox.setChecked(self.config.get('autostart', False))
-        inputSettingsLayout.addWidget(self.autostartCheckbox)
+        startup_layout.addWidget(self.autostartCheckbox)
+        self.hotkeyEnabledCheck = QCheckBox('码表显示／隐藏快捷键')
+        self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
+        self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
+        startup_layout.addWidget(self.hotkeyEnabledCheck)
+        shortcut_row = QHBoxLayout()
+        self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
+        self.hotkeyEdit.setToolTip('按下新的组合键后点击“应用”；未开始输入时切换设置窗口。')
+        self.hotkeyEdit.setEnabled(self.hotkeyEnabledCheck.isChecked() and self.guide_hotkey.supported)
+        self.hotkeyEnabledCheck.toggled.connect(self.hotkeyEdit.setEnabled)
+        shortcut_row.addWidget(self.hotkeyEdit, 1)
+        self.hotkeyApplyButton = QPushButton('应用')
+        self.hotkeyApplyButton.setEnabled(self.guide_hotkey.supported)
+        self.hotkeyApplyButton.clicked.connect(self.saveGuideHotkey)
+        shortcut_row.addWidget(self.hotkeyApplyButton)
+        startup_layout.addLayout(shortcut_row)
+        self.hotkeyStatus = QLabel('全局快捷键；隐藏码表时输入继续运行。')
+        self.hotkeyStatus.setWordWrap(True)
+        startup_layout.addWidget(self.hotkeyStatus)
+        inputSettingsLayout.addWidget(startup_group)
         self.updateFastMorseModeAvailability()
         self.updateTimingSummary()
 
@@ -1417,20 +1520,23 @@ class Window(QDialog):
             QMessageBox.warning(self, '设置无效', '请检查输入及声音设置。')
             return
         self.configManager.save_config(self.config)
+        self.applyGuideHotkey()
 
     def changeAudioDevice(self):
         self.audioSelector.show()
 
     def toggleOnOff(self):
         if self.codeslayoutview is None:
+            self.goForIt()
+            self.updateTrayInputState()
             return
         self.config['off'] = not self.config.get('off', False)
-        self.onOffAction.setText("继续输入" if self.config['off'] else "暂停输入")
         if self.config['off']:
             self.stopKeyListener()
         else:
             self.startKeyListener()
         self.updateOutputState()
+        self.updateTrayInputState()
 
     def stopKeyListener(self):
         if self.listenerThread is not None:
@@ -1458,6 +1564,7 @@ class Window(QDialog):
         if self.codeslayoutview is not None:
             self.codeslayoutview.reset()
             self.updateOutputState()
+        self.updateTrayInputState()
 
     def stopIt(self):
         logging.debug("Stopping components...")
@@ -1477,7 +1584,7 @@ class Window(QDialog):
 
     def createActions(self):
         self.showWindowAction = QAction("显示窗口", self, triggered=self.showCurrentWindow)
-        self.onOffAction = QAction("继续输入" if self.config.get('off', False) else "暂停输入", self, triggered=self.toggleOnOff)
+        self.onOffAction = QAction('启用输入', self, checkable=True, triggered=self.toggleOnOff)
         self.onOpenSettingsAction = QAction("打开设置", self, triggered=self.onOpenSettings)
         self.quitAction = QAction("退出", self, triggered=self.quitApplication)
 
@@ -1922,16 +2029,19 @@ class CustomApplication(QApplication):
 
 
 if __name__ == '__main__':
-    user_data_dir = get_user_data_dir()
-    os.makedirs(user_data_dir, exist_ok=True)
+    smoke_report = None
+    if '--smoke-test' in sys.argv:
+        smoke_report = sys.argv[sys.argv.index('--smoke-test') + 1]
+    user_data_dir = str(bootstrap_assets(DEFAULT_CONFIG))
     from crash_diagnostics import install_diagnostics, log_qt_message
     install_diagnostics(user_data_dir)
     QtCore.qInstallMessageHandler(log_qt_message)
     app = CustomApplication(sys.argv)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "摩斯输入", "未检测到系统托盘，无法启动程序。")
-        sys.exit(1)
+        # At Windows login Explorer may still be starting. Qt automatically
+        # registers a visible tray icon once the notification area is ready.
+        logging.info('Waiting for the system tray to become available')
 
     QApplication.setQuitOnLastWindowClosed(False)
 
@@ -1949,12 +2059,12 @@ if __name__ == '__main__':
     # Finish initializing the window if needed (after actions are available)
     window.postInit()
 
-    # Show or hide the window based on the configuration
-    if configmanager.config.get("autostart", False):
-        window.hide()
-        window.start()
+    if smoke_report:
+        from frozen_smoke import verify_installation
+        verify_installation(window, smoke_report)
     else:
-        window.show()
+        window.startDesktopIntegration()
+        window.presentAtLaunch(startup=('--startup' in sys.argv or '/auto' in sys.argv))
 
     # Start the application event loop
     exit_code = app.exec_()

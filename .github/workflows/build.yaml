@@ -1,53 +1,137 @@
-name: Build MorseWriter
+name: 构建 Windows 安装包
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: 需要构建的已有标签或提交
+        type: string
+        default: ''
+      release_tag:
+        description: 发布时必须与版本文件及构建提交一致的标签
+        type: string
+        default: ''
+    outputs:
+      version:
+        value: ${{ jobs.build.outputs.version }}
+      commit_sha:
+        value: ${{ jobs.build.outputs.commit_sha }}
+      artifact_id:
+        value: ${{ jobs.build.outputs.artifact_id }}
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      commit_sha: ${{ steps.metadata.outputs.commit_sha }}
+      artifact_id: ${{ steps.installer.outputs.artifact-id }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONIOENCODING: utf-8
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.1.5
-
-      - name: Set up Python
-        uses: actions/setup-python@v5.1.0
+      - name: 获取待构建代码
+        uses: actions/checkout@v7
         with:
-          python-version: '3.11.4'
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Install dependencies
+      - name: 验证版本与标签
+        id: metadata
+        env:
+          EXPECTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $versionText = (Get-Content -LiteralPath version -Raw).Trim()
+          if ($versionText -notmatch '^VersionNumber=(\d+\.\d+\.\d+)$') {
+            throw 'version 文件必须使用 VersionNumber=x.y.z 格式。'
+          }
+          $version = $Matches[1]
+          $commit = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw '无法读取构建提交。' }
+          if ($env:EXPECTED_TAG) {
+            if ($env:EXPECTED_TAG -cne "v$version") { throw '发布标签与 version 文件不一致。' }
+            $tagCommit = (git rev-parse "refs/tags/$($env:EXPECTED_TAG)^{commit}").Trim()
+            if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $commit) {
+              throw '标签必须指向本次测试和构建的同一提交。'
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "commit_sha=$commit" >> $env:GITHUB_OUTPUT
+
+      - name: 配置 Python 3.11 x64
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          architecture: x64
+          cache: pip
+
+      - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'pip 更新失败。' }
+          python -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw '依赖安装失败。' }
 
-      - name: Validate mappings and behavior
+      - name: 验证码表与回归测试
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           python tools/generate_codechart.py --check
+          if ($LASTEXITCODE -ne 0) { throw '码表与软件映射不一致。' }
           python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { throw '回归测试失败。' }
 
-      - name: Build with PyInstaller
+      - name: 构建中文安装包
         run: |
-          pyinstaller --clean MorseCodeGUI.spec
+          $buildOptions = @{
+            PythonExecutable = (Get-Command python -ErrorAction Stop).Source
+            SkipTests = $true
+          }
+          $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          $installedCompiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if ($compiler) {
+            $buildOptions.ISCCPath = $compiler.Source
+          } elseif (Test-Path -LiteralPath $installedCompiler) {
+            $buildOptions.ISCCPath = $installedCompiler
+          } else {
+            $buildOptions.BootstrapCompiler = $true
+          }
+          & ./build.ps1 @buildOptions
 
-      - name: Download Inno Setup
+      - name: 验证独立程序首次启动
         run: |
-          choco install innosetup --yes
+          ./tools/check_frozen_build.ps1 -Executable 'dist/MorseWriter/MorseWriter.exe' -ReportPath 'build/frozen-smoke.json'
 
-      - name: Build Installer
-        run: |
-          Start-Process -FilePath "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" -ArgumentList "MorseWriterInstaller.iss" -Wait
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4.3.3
+      - name: 上传已验证安装包与校验值
+        id: installer
+        uses: actions/upload-artifact@v7
         with:
-          name: morsewriter-installer
-          path: Output/MorseWriter-Installer.exe
+          name: morsewriter-v${{ steps.metadata.outputs.version }}-windows-x64-${{ steps.metadata.outputs.commit_sha }}
+          path: |
+            dist/MorseWriter-Setup-v${{ steps.metadata.outputs.version }}-x64.exe
+            dist/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: 保存独立程序验收报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frozen-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/frozen-smoke.json
+          if-no-files-found: ignore
+          retention-days: 7

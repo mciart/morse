@@ -1,46 +1,38 @@
-# -*- mode: python -*-
+# -*- mode: python ; coding: utf-8 -*-
+"""Windows onedir build; only reviewed defaults enter the distribution."""
+from pathlib import Path
+import sys
 
-block_cipher = None
+from PyInstaller.utils.hooks import collect_submodules
 
+project = Path(SPECPATH)
+sys.path.insert(0, str(project / 'tools'))
+from build_release import pyinstaller_datas, read_version, version_info
+
+app_version = read_version(project / 'version')
 a = Analysis(
-    ['MorseCodeGUI.py'],
-    pathex=['.'],
+    [str(project / 'MorseCodeGUI.py')],
+    pathex=[str(project)],
     binaries=[],
-    datas=[
-        ('user_data/*.*', 'user_data'),  # Include all JSON files in the current directory
-        ('res/*.*', 'res')  # Include all files in the 'res' directory
-    ],
-    hiddenimports =['PyQt5.sip'],
+    datas=pyinstaller_datas(project),
+    hiddenimports=['PyQt5.sip', 'keyboard._winkeyboard'] + collect_submodules('pressagio'),
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher
+    excludes=['tkinter', 'nava'],
+    noarchive=False,
 )
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
+pyz = PYZ(a.pure)
 exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
+    pyz, a.scripts, [],
+    exclude_binaries=True,
     name='MorseWriter',
     debug=False,
     strip=False,
-    upx=True,
-    runtime_tmpdir=None,
-    console=False,  # Set to False to run without a command window
-    icon='res/MorseWriterIcon.ico',
-    uac_uiaccess=True
+    upx=False,
+    console=False,
+    icon=str(project / 'res' / 'MorseWriterIcon.ico'),
+    version=version_info(app_version),
+    uac_admin=False,
+    uac_uiaccess=False,
 )
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    name='morsewriter'
-)
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='MorseWriter')

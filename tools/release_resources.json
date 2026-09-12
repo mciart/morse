@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "resources": [
+    {"source": "user_data/layouts.json", "target": "defaults/layouts.json"},
+    {"source": "user_data/abbreviations_en.txt", "target": "defaults/abbreviations_en.txt"},
+    {
+      "source": "res/morsewriter.sqlite",
+      "target": "defaults/morsewriter.sqlite",
+      "sha256": "0de6387ef7a2aa72f772000281ab6f072a50e97681cceb826fb50ec0d3d13ad9"
+    },
+    {"source": "res/morsewriter_pressagio.ini", "target": "res/morsewriter_pressagio.ini"},
+    {"source": "version", "target": "version"},
+    {"source": "LICENSE", "target": "LICENSE"}
+  ]
+}

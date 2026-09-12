@@ -23,6 +23,9 @@ class WindowBehaviorTests(unittest.TestCase):
         project = Path(__file__).resolve().parents[1]
         self.enterContext(patch.object(morse, "user_data_dir", str(project / "user_data"), create=True))
         temporary = self.enterContext(TemporaryDirectory())
+        database_resolver = morse.prediction_database
+        self.enterContext(patch.object(morse, 'prediction_database',
+                                       side_effect=lambda *args, **kwargs: database_resolver(temporary)))
         config_path = Path(temporary) / "config.json"
         config_path.write_text(json.dumps(dict(
             morse.DEFAULT_CONFIG, keylen=3, withsound=False, minLetterPause=60000,

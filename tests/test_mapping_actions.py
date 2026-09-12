@@ -56,6 +56,9 @@ class MappingActionTests(unittest.TestCase):
         self.enterContext(patch.object(morse, "user_data_dir", data_path, create=True))
         self.enterContext(patch.object(morse, "get_user_data_dir", return_value=data_path))
         temporary = self.enterContext(TemporaryDirectory())
+        database_resolver = morse.prediction_database
+        self.enterContext(patch.object(morse, 'prediction_database',
+                                       side_effect=lambda *args, **kwargs: database_resolver(temporary)))
         config_path = Path(temporary) / "config.json"
         config_path.write_text(json.dumps(dict(
             morse.DEFAULT_CONFIG, keylen=3, withsound=False, guide_layout='main',
@@ -156,7 +159,7 @@ class MappingActionTests(unittest.TestCase):
                 self.assertEqual(self.backend.mock_calls, [call.write(character, exact=True)])
 
     def test_function_keys_and_number_page_work_without_prediction_state(self):
-        self.window.typestate = None
+        self.window.closePrediction()
         for number, code in enumerate(FUNCTION_CODES, 1):
             with self.subTest(function=number):
                 self.backend.reset_mock()
