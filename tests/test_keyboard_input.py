@@ -2,7 +2,7 @@
 
 import unittest
 from types import MethodType, SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 # Importing the application should not truncate the user's log during tests.
 with patch("logging.basicConfig"):
@@ -146,6 +146,8 @@ class WindowListenerLifecycleTests(unittest.TestCase):
     def make_window(self):
         window = SimpleNamespace(
             config={"off": False}, listenerThread=Mock(), codeslayoutview=Mock(),
+            engine=Mock(), engine_timer=Mock(), audio=Mock(), _shutting_down=False,
+            inputError=Mock(), processEngineEvents=Mock(),
             endCharacterTimer=Mock(), fast_morse_mode_timer=Mock(),
             repeat_character_timer=Mock(), currentCharacter=[1, 2],
             lastKeyDownTime=123, repeaton=True, showNormal=Mock(),
@@ -154,7 +156,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             get_configured_keys=Mock(return_value=["space"]),
             on_press=Mock(), on_release=Mock(),
         )
-        for name in ("stopKeyListener", "startKeyListener", "stopIt", "handle_key_event"):
+        for name in ("stopKeyListener", "startKeyListener", "stopIt", "handle_key_event", "resetOutput"):
             setattr(window, name, MethodType(getattr(morse.Window, name), window))
         return window
 
@@ -186,11 +188,11 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             self.assertFalse(window.config["off"])
             listener_class.assert_called_once_with(configured_keys=["space"])
             listener_class.return_value.start.assert_called_once_with()
-            listener_class.return_value.keyEvent.connect.assert_called_once_with(window.handle_key_event)
+            listener_class.return_value.timedKeyEvent.connect.assert_called_once_with(window.handle_key_event)
             window.handle_key_event("space", True, 0)
             window.handle_key_event("space", False, 0)
-            window.on_press.assert_called_once_with("space", 0)
-            window.on_release.assert_called_once_with("space", 0)
+            self.assertEqual(window.engine.key.call_args_list, [
+                call(0, True, ANY), call(0, False, ANY)])
 
     def test_returning_to_settings_ignores_queued_events_and_onoff(self):
         window = self.make_window()

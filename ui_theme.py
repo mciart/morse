@@ -2,8 +2,10 @@
 
 import sys
 
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontDatabase, QPalette
+from PyQt5.QtWidgets import QWidget
+from PyQt5 import sip
 
 
 THEME_COLORS = {
@@ -45,6 +47,75 @@ THEMES = {
     },
 }
 THEME_MODES = ("system", "light", "dark")
+
+
+def _set_windows_titlebar(hwnd, dark):
+    """Theme an existing HWND; unsupported DWM attributes are harmless."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        # HWND is pointer-sized on 64-bit Windows, unlike the default c_int.
+        dwm.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p,
+                        wintypes.DWORD]
+        dwm.restype = wintypes.LONG
+        value = wintypes.BOOL(bool(dark))
+        result = dwm(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        if result != 0:
+            # Windows 10 before 20H1 used attribute 19 for this preference.
+            result = dwm(hwnd, 19, ctypes.byref(value), ctypes.sizeof(value))
+        if sys.getwindowsversion().build >= 22000:
+            colors = THEMES['dark' if dark else 'light']
+            for attribute, color_name in ((35, 'background'), (36, 'text')):
+                color = QColor(colors[color_name])
+                colorref = wintypes.DWORD(color.red() | (color.green() << 8) |
+                                          (color.blue() << 16))
+                dwm(hwnd, attribute, ctypes.byref(colorref), ctypes.sizeof(colorref))
+        return result == 0
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+class NativeTitlebarTheme(QObject):
+    """Follow Qt top-level lifetimes without creating native windows."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self._applying = False
+        app.installEventFilter(self)
+
+    def applyWindow(self, widget):
+        if (self._applying or sys.platform != 'win32' or
+                self.app.platformName() != 'windows' or
+                not isinstance(widget, QWidget) or sip.isdeleted(widget)):
+            return
+        if (not widget.isWindow() or widget.windowType() not in
+                (Qt.Window, Qt.Dialog, Qt.Tool) or
+                widget.windowFlags() & Qt.FramelessWindowHint or
+                not widget.testAttribute(Qt.WA_WState_Created)):
+            return
+        # effectiveWinId does not force creation, unlike winId(). A WinIdChange
+        # can also signal destruction; never recreate that HWND from a filter.
+        native_id = widget.effectiveWinId()
+        if not native_id:
+            return
+        hwnd = int(native_id)
+        self._applying = True
+        try:
+            _set_windows_titlebar(hwnd, self.app.property('resolvedTheme') == 'dark')
+        finally:
+            self._applying = False
+
+    def refresh(self):
+        for widget in self.app.topLevelWidgets():
+            self.applyWindow(widget)
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Show, QEvent.WinIdChange):
+            self.applyWindow(watched)
+        return False
 
 
 def _remember_system_palette(app):
@@ -329,6 +400,9 @@ def apply_theme(app, mode="system"):
         }
     """ % colors)
     app.setProperty("resolvedTheme", resolved)
+    if not hasattr(app, '_morse_titlebar_theme'):
+        app._morse_titlebar_theme = NativeTitlebarTheme(app)
+    app._morse_titlebar_theme.refresh()
     return resolved
 
 

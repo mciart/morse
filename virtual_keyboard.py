@@ -2,11 +2,11 @@
 
 from html import escape
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGraphicsScene, QGraphicsView, QGridLayout,
-    QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
 )
 
 from ui_theme import THEME_COLORS
@@ -14,6 +14,134 @@ from ui_theme import THEME_COLORS
 
 def morse(code):
     return str(code).replace('1', '•').replace('2', '–')
+
+
+class FeedbackLabel(QLabel):
+    """Keep full feedback available without letting it widen the window."""
+
+    def __init__(self, text='', parent=None):
+        super().__init__(parent)
+        self._full_text = text
+        self.setTextFormat(Qt.PlainText)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full_text = str(text)
+        self.setToolTip(self._full_text)
+        self._elide()
+
+    def _elide(self):
+        super().setText(self.fontMetrics().elidedText(
+            self._full_text, Qt.ElideRight, max(0, self.contentsRect().width())))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+
+class InputFeedbackPanel(QFrame):
+    """Small, unscaled input feedback, independent of the expensive key grid."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName('inputFeedbackPanel')
+        self._roles = frozenset()
+        self._sounding = None
+        self._result_success = True
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        content = QVBoxLayout(self)
+        content.setContentsMargins(9, 5, 9, 5)
+        content.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        self.dot_label = QLabel('• 点')
+        self.dash_label = QLabel('– 划')
+        for indicator in (self.dot_label, self.dash_label):
+            indicator.setAlignment(Qt.AlignCenter)
+            indicator.setMargin(3)
+            indicator.setMinimumWidth(indicator.fontMetrics().horizontalAdvance('• 按住') + 10)
+            indicator.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            top.addWidget(indicator)
+        self.code_label = FeedbackLabel('等待输入')
+        self.code_label.setObjectName('morseInput')
+        code_font = QFont(QApplication.font())
+        code_font.setPointSizeF(14)
+        code_font.setBold(True)
+        self.code_label.setFont(code_font)
+        self.code_label.setAlignment(Qt.AlignCenter)
+        top.addWidget(self.code_label, 1)
+        content.addLayout(top)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(5)
+        self.progress.setToolTip('字符确认进度；继续输入会重新计时。')
+        content.addWidget(self.progress)
+        self.result_label = FeedbackLabel('最近输入将显示在这里')
+        self.result_label.setMinimumHeight(self.result_label.fontMetrics().height() + 2)
+        content.addWidget(self.result_label)
+        self.result_timer = QTimer(self)
+        self.result_timer.setSingleShot(True)
+        self.result_timer.setInterval(2400)
+        self.result_timer.timeout.connect(self.clearResult)
+        self.updateTheme()
+
+    def setInputFeedback(self, held_roles=(), progress=0.0, sounding=None):
+        roles = frozenset(held_roles)
+        if roles != self._roles or sounding != self._sounding:
+            self._roles, self._sounding = roles, sounding
+            self._updateIndicators()
+        self.progress.setValue(round(max(0.0, min(1.0, float(progress))) * 1000))
+
+    def _updateIndicators(self):
+        self.dot_label.setText('• 按住' if 'straight' in self._roles else '• 点')
+        for label, role in ((self.dot_label, 'dot'), (self.dash_label, 'dash')):
+            pressed = role in self._roles or (role == 'dot' and 'straight' in self._roles)
+            sounding = self._sounding == role or (role == 'dot' and self._sounding == 'straight')
+            colors = THEME_COLORS
+            label.setStyleSheet(
+                'QLabel { background: %s; color: %s; border: 1px solid %s; border-radius: 4px; }'
+                % (colors['highlight'] if pressed else colors['surface'],
+                   colors['highlight_text'] if pressed else colors['muted'],
+                   colors['success'] if sounding else colors['accent'] if pressed else colors['border']))
+        if 'commit' in self._roles:
+            self.progress.setToolTip('确认键已按下')
+        else:
+            self.progress.setToolTip('字符确认进度；继续输入会重新计时。')
+
+    def showResult(self, label, success=True):
+        self.showMessage(('已输入：' if success else '无效码：') + str(label), success)
+
+    def showMessage(self, message, success=True):
+        """Display a complete status/error message without adding a prefix."""
+        self._result_success = bool(success)
+        self.result_label.setText(str(message))
+        self._updateResultColor()
+        self.result_timer.start()
+
+    def clearResult(self):
+        self._result_success = True
+        self.result_label.setText('最近输入将显示在这里')
+        self._updateResultColor()
+
+    def _updateResultColor(self):
+        color = THEME_COLORS['success' if self._result_success else 'danger']
+        if not self.result_timer.isActive() and self.result_label._full_text == '最近输入将显示在这里':
+            color = THEME_COLORS['muted']
+        self.result_label.setStyleSheet('color: %s; background: transparent;' % color)
+
+    def updateTheme(self):
+        colors = THEME_COLORS
+        self.setStyleSheet(
+            'QFrame#inputFeedbackPanel { background: %s; border: 1px solid %s; border-radius: 7px; }'
+            'QLabel#morseInput { background: transparent; color: %s; border: none; font-weight: bold; }'
+            'QProgressBar { background: %s; border: none; border-radius: 2px; }'
+            'QProgressBar::chunk { background: %s; border-radius: 2px; }'
+            % (colors['input'], colors['border'], colors['accent'], colors['surface'], colors['accent']))
+        self._updateIndicators()
+        self._updateResultColor()
 
 
 class KeyCap(QFrame):
@@ -353,10 +481,8 @@ class VirtualKeyboardView(QWidget):
         self.subtitle = QLabel('照着键位输入摩斯码，匹配的按键会自动亮起。')
         self.subtitle.setObjectName('guideHint')
         self.subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.input_label = QLabel('等待输入')
-        self.input_label.setAlignment(Qt.AlignCenter)
-        self.input_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.input_label.setObjectName('morseInput')
+        self.input_feedback = InputFeedbackPanel()
+        self.input_label = self.input_feedback.code_label
         self.settings_button = QPushButton('返回设置')
         self.settings_button.setToolTip('暂停输入并返回设置（Ctrl + Shift + P）')
         self.settings_button.clicked.connect(self.settingsRequested.emit)
@@ -377,6 +503,7 @@ class VirtualKeyboardView(QWidget):
         self._compact_header = None
         self._set_compact_header(self.width() < 760)
         outer.addLayout(self.header)
+        outer.addWidget(self.input_feedback)
 
         self.scroll_area = GuideViewport()
         self.chart_widget = QWidget()
@@ -539,7 +666,7 @@ class VirtualKeyboardView(QWidget):
         if compact == self._compact_header:
             return
         self._compact_header = compact
-        for widget in (self.heading, self.subtitle, self.input_label, self.settings_button, self.view_options):
+        for widget in (self.heading, self.subtitle, self.settings_button, self.view_options):
             self.header.removeWidget(widget)
         for column in range(4):
             self.header.setColumnStretch(column, 0)
@@ -549,15 +676,12 @@ class VirtualKeyboardView(QWidget):
         if compact:
             self.subtitle.hide()
             self.header.addWidget(self.settings_button, 0, 1)
-            self.header.addWidget(self.input_label, 1, 0, 1, 2)
-            self.header.addWidget(self.view_options, 2, 0, 1, 2)
+            self.header.addWidget(self.view_options, 1, 0, 1, 2)
         else:
             self.subtitle.show()
             self.header.addWidget(self.subtitle, 1, 0, 1, 2)
             self.header.addWidget(self.view_options, 0, 1)
-            self.header.addWidget(self.input_label, 0, 2, 2, 1)
-            self.header.setColumnMinimumWidth(2, 150)
-            self.header.addWidget(self.settings_button, 0, 3, 2, 1)
+            self.header.addWidget(self.settings_button, 0, 2, 2, 1)
 
     def resizeEvent(self, event):
         self._set_compact_header(event.size().width() < 760)
@@ -612,8 +736,21 @@ class VirtualKeyboardView(QWidget):
     def reset(self):
         self._prefix = ''
         self.input_label.setText('等待输入')
+        self.input_feedback.setInputFeedback()
         for cap in self.crs.values():
             cap.reset()
+
+    def setInputFeedback(self, held_roles=(), progress=0.0, sounding=None):
+        """Update held dot/dash/straight roles and 0–1 commit progress only."""
+        self.input_feedback.setInputFeedback(held_roles, progress, sounding)
+
+    def showResult(self, label, success=True):
+        """Show recent output independently of reset and subsequent input."""
+        self.input_feedback.showResult(label, success)
+
+    def showMessage(self, message, success=True):
+        """Show a complete diagnostic/status message verbatim."""
+        self.input_feedback.showMessage(message, success)
 
     def _advance(self, symbol):
         self._prefix += symbol
@@ -632,10 +769,9 @@ class VirtualKeyboardView(QWidget):
         self.setStyleSheet(
             'VirtualKeyboardView, QGraphicsView { background: %s; }'
             'QLabel#guideHint { color: %s; }'
-            'QLabel#morseInput { background: %s; color: %s; border: 1px solid %s;'
-            'border-radius: 7px; padding: 9px 15px; font-size: 17px; font-weight: bold; }'
-            % (colors['background'], colors['muted'], colors['input'], colors['accent'], colors['border'])
+            % (colors['background'], colors['muted'])
         )
+        self.input_feedback.updateTheme()
         self.chart_widget.setStyleSheet(
             'QWidget#guideBoard { background: %s; } QLabel#guideHint { color: %s; }'
             % (colors['background'], colors['muted']))

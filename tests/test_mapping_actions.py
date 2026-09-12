@@ -76,6 +76,9 @@ class MappingActionTests(unittest.TestCase):
         self.enterContext(patch.object(morse.AudioDeviceSelector, "play_audio"))
         self.quit_app = self.enterContext(patch.object(self.app, "quit"))
 
+        real_audio = morse.ToneAudio
+        self.enterContext(patch.object(morse, 'ToneAudio',
+                                       side_effect=lambda parent: real_audio(parent, backend_enabled=False)))
         manager = morse.ConfigManager(str(config_path))
         self.layout = morse.LayoutManager(str(project / "user_data" / "layouts.json"))
         self.window = morse.Window(layoutManager=self.layout, configManager=manager)
@@ -87,7 +90,7 @@ class MappingActionTests(unittest.TestCase):
         self.start_input()
 
     def tearDown(self):
-        self.window.stopIt()
+        self.window.shutdown()
         self.window.trayIcon.hide()
         for widget in self.views + [self.window.audioSelector, self.window]:
             try:
@@ -113,10 +116,10 @@ class MappingActionTests(unittest.TestCase):
         for digit in code:
             role = int(digit) - 1
             key = ("space", "enter")[role]
-            listener.keyEvent.emit(key, True, role)
-            listener.keyEvent.emit(key, False, role)
-        listener.keyEvent.emit("right ctrl", True, 2)
-        listener.keyEvent.emit("right ctrl", False, 2)
+            listener._emit_key(key, True, role, morse.time.monotonic())
+            listener._emit_key(key, False, role, morse.time.monotonic())
+        listener._emit_key("right ctrl", True, 2, morse.time.monotonic())
+        listener._emit_key("right ctrl", False, 2, morse.time.monotonic())
         self.assertEqual(self.window.currentCharacter, [])
         view = self.window.codeslayoutview
         if view is not None and view not in self.views:

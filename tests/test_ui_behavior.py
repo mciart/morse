@@ -37,6 +37,9 @@ class WindowBehaviorTests(unittest.TestCase):
         self.enterContext(patch.object(morse.QMessageBox, "information"))
         self.quit_app = self.enterContext(patch.object(self.app, "quit"))
 
+        real_audio = morse.ToneAudio
+        self.enterContext(patch.object(morse, 'ToneAudio',
+                                       side_effect=lambda parent: real_audio(parent, backend_enabled=False)))
         manager = morse.ConfigManager(str(config_path))
         layout = morse.LayoutManager(str(project / "user_data" / "layouts.json"))
         self.window = morse.Window(layoutManager=layout, configManager=manager)
@@ -47,7 +50,7 @@ class WindowBehaviorTests(unittest.TestCase):
         self.app.processEvents()
 
     def tearDown(self):
-        self.window.stopIt()
+        self.window.shutdown()
         self.window.trayIcon.hide()
         for widget in self.views + [self.window.audioSelector, self.window]:
             widget.hide()
@@ -175,9 +178,9 @@ class WindowBehaviorTests(unittest.TestCase):
                     self.quit_app.assert_not_called()
 
             # Release the key held during minimization, then enter another dot.
-            listener.keyEvent.emit("space", False, 0)
-            listener.keyEvent.emit("space", True, 0)
-            listener.keyEvent.emit("space", False, 0)
+            listener._emit_key("space", False, 0, morse.time.monotonic())
+            listener._emit_key("space", True, 0, morse.time.monotonic())
+            listener._emit_key("space", False, 0, morse.time.monotonic())
             self.assertEqual(self.window.currentCharacter, [1, 2, 1])
 
     def test_exit_action_stops_listener_and_timers_before_quitting(self):

@@ -13,15 +13,14 @@ from enum import Enum
 from threading import Thread
 
 # Third-party imports
-from PyQt5 import QtCore, QtMultimedia
-from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio, QAudioFormat, QAudioOutput
+from PyQt5 import QtCore
+from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio
 from PyQt5.QtCore import QIODevice, QFile, QThread, pyqtSignal, QTimer, Qt, QObject, QLocale, QTranslator, QLibraryInfo
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout,
+from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout, QSpinBox,
                              QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                              QPushButton, QRadioButton, QSystemTrayIcon, QVBoxLayout,
                              QWidget, QApplication, QMenu, QFileDialog, QStatusBar, QScrollArea)
-from nava import play
 import keyboard
 import mouse
 # Local application/library specific imports
@@ -31,6 +30,9 @@ import icons_rc
 from ui_theme import ThemeManager, THEME_COLORS
 from keyboard_output import KeyboardOutput
 from virtual_keyboard import VirtualKeyboardView
+from morse_engine import MorseEngine
+from input_listener import KeyListenerThread
+from tone_audio import ToneAudio
 
 def get_user_data_dir(app_name="MorseWriter"):
     """
@@ -49,9 +51,7 @@ def get_user_data_dir(app_name="MorseWriter"):
         return os.path.join(os.path.dirname(os.path.realpath(__file__)), 'user_data')
 
 
-# Configure basic logger
-logfile = os.path.join(get_user_data_dir(), "morsewriter-log.log")
-logging.basicConfig(level=logging.DEBUG, filename=logfile, filemode='w',format='%(name)s - %(levelname)s - %(message)s')
+# Logging is installed by the executable; importing the UI never overwrites logs.
 
 # # If you want to the console
 # logging.basicConfig(level=logging.DEBUG,format='%(name)s - %(levelname)s - %(message)s')
@@ -74,8 +74,14 @@ DEFAULT_CONFIG = {
   "keyone": "SPACE",
   "keytwo": "ENTER",
   "keythree": "RCTRL",
-  "maxDitTime": 350,  # It's better to store numbers as numbers, not strings
-  "minLetterPause": 1000,
+  "maxDitTime": 0,
+  "minLetterPause": 0,
+  "keyer_mode": "manual",
+  "wpm": 15,
+  "tone_frequency": 600,
+  "tone_volume": 30,
+  "confirmation_sound": False,
+  "audio_device": "",
   "withsound": True,
   "SoundDit": "res/dit_sound.wav",
   "SoundDah": "res/dah_sound.wav",
@@ -94,62 +100,44 @@ DEFAULT_CONFIG = {
 
 
 class AudioDeviceSelector(QWidget):
-    def __init__(self):
-        super().__init__()
+    deviceChanged = pyqtSignal(str)
 
+    def __init__(self, audio, parent=None, device_name=""):
+        super().__init__(parent, Qt.Window)
+        self.audio = audio
         self.setWindowTitle('音频设备')
-        self.layout = QVBoxLayout()
-
-        self.label = QLabel('选择音频设备：')
-        self.layout.addWidget(self.label)
-
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel('选择音频设备：'))
         self.device_selector = QComboBox()
-        self.list_available_devices()
+        self.device_selector.addItem('跟随系统默认设备', '')
+        for device in QAudioDeviceInfo.availableDevices(QAudio.AudioOutput):
+            name = device.deviceName()
+            if self.device_selector.findData(name) < 0:
+                self.device_selector.addItem(name, name)
+        self.device_selector.setCurrentIndex(max(0, self.device_selector.findData(device_name)))
         self.device_selector.currentIndexChanged.connect(self.device_changed)
-        self.layout.addWidget(self.device_selector)
-
+        layout.addWidget(self.device_selector)
         self.test_audio_button = QPushButton('播放测试音')
         self.test_audio_button.clicked.connect(self.test_audio)
-        self.layout.addWidget(self.test_audio_button)
+        layout.addWidget(self.test_audio_button)
+        self.status_label = QLabel('测试音使用当前音高与音量。')
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+        self.audio.error.connect(self.status_label.setText)
+        self.setWindowIcon(QIcon(':/morse-writer.ico'))
 
-        self.setLayout(self.layout)
-
-        self.sound_file = None
-        self.player = QtMultimedia.QMediaPlayer()
-        self.selected_device = self.device_selector.currentData()
-
-        icon = QIcon(':/morse-writer.ico')
-        self.setWindowIcon(icon)
-
-    def device_changed(self, index):
-        self.selected_device = self.device_selector.itemData(index)
-        print(f"Selected device audio device {index} : {self.selected_device.deviceName()}")
-
-    def list_available_devices(self):
-        default_device = QAudioDeviceInfo.defaultOutputDevice()
-        self.device_selector.addItem("默认输出设备", default_device)
-
-        for device in QAudioDeviceInfo.availableDevices(QAudio.AudioOutput):
-            device_names = [self.device_selector.itemText(i) for i in range(self.device_selector.count())]
-            if device.deviceName() != default_device.deviceName() and device.deviceName() not in device_names:
-                self.device_selector.addItem(device.deviceName(), device)
-
-    def play_audio(self, file):
-        # check here if file exist
-        if os.path.exists(file):
-            url = QtCore.QUrl.fromLocalFile(QtCore.QDir.current().absoluteFilePath(file))
-            self.player.setMedia(QtMultimedia.QMediaContent(url))
-            self.player.play()
+    def device_changed(self, _index):
+        name = self.device_selector.currentData()
+        self.audio.set_device(name or None)
+        self.deviceChanged.emit(name)
 
     def test_audio(self):
-        self.play_audio("res/dah_sound.wav")
+        self.status_label.setText('正在试听；测试音会自动停止。')
+        self.audio.preview()
 
-    def select_audio_file(self):
-        file_dialog = QFileDialog()
-        self.audio_file, _ = file_dialog.getOpenFileName(self, "选择音频文件", "", "音频文件 (*.wav)")
-        if self.audio_file:
-            print(f"Selected audio file: {self.audio_file} to play on device {self.selected_device.deviceName()}")
-            self.play_audio(self.audio_file)
+    def play_audio(self, _file):
+        # Compatibility for integrations using the old audio-test entry point.
+        self.test_audio()
 
 
 @staticmethod
@@ -341,6 +329,8 @@ class ConfigManager:
                     data = json.load(file)
                     # self.update_keystrokes(data) # Note:cause issue to save configuration
                     self.convert_types(data)
+                    if 'keyer_mode' not in data:
+                        data['keyer_mode'] = 'iambic' if data.get('fastMorseMode', False) else 'manual'
                     return dict(self.default_config, **data)
             except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
                 logging.warning(f"Error loading configuration: {e}")
@@ -479,63 +469,6 @@ class TypeState(pressagio.callback.Callback):
                 self.keyLength = 0
 
         return self.expanded_text, self.keyLength
-
-class KeyListenerThread(QThread):
-    keyEvent = pyqtSignal(str, bool, int)  # Emit key name and press/release status
-
-    def __init__(self, configured_keys):
-        super().__init__()
-        self.configured_keys = configured_keys  # keys in the 'keyboard' library format
-        self.keep_running = True  # Control running of the loop
-
-    def run(self):
-        # Check if the operating system is MacOS
-        if platform.system() == 'Darwin':
-            # If it is, only allow modifier keys
-            allowed_keys = ['shift', 'ctrl', 'alt', 'cmd']
-            self.configured_keys = [key for key in self.configured_keys if key in allowed_keys]
-
-        unhooks = []
-        try:
-            for role, key in enumerate(self.configured_keys):
-                # Bind the role to the hook: event names can change with Shift
-                # or use a different alias (e.g. "shift" vs "left shift").
-                callback = lambda event, key=key, role=role: self.on_key_event(event, key, role)
-                unhooks.append(keyboard.hook_key(key, callback, suppress=True))
-
-            while self.keep_running:
-                time.sleep(0.1)
-        finally:
-            # Clean up even if startup fails or stop() races with registration.
-            for unhook in reversed(unhooks):
-                unhook()
-
-    def on_key_event(self, event, key, role):
-        if not self.keep_running:
-            return True
-        # keyboard.hook_key also matches keypad scan codes and, on Windows,
-        # both Ctrl keys. Preserve keys outside the selected physical input.
-        if event.is_keypad:
-            return True
-        sided_names = {
-            'left ctrl': ('left ctrl', 'ctrl'),
-            'right ctrl': ('right ctrl',),
-            'left shift': ('left shift', 'shift'),
-            'right shift': ('right shift',),
-        }
-        if key in sided_names and event.name not in sided_names[key]:
-            return True
-        try:
-            self.keyEvent.emit(key, event.event_type == keyboard.KEY_DOWN, role)
-        except Exception as e:
-            logging.warning(f"[KeyListenerThread] Error handling key event: {e}")
-            return True
-        return False  # Only the active Morse input keys are consumed.
-
-    def stop(self):
-        self.keep_running = False  # Signal the loop to stop
-        self.wait()  # Wait for the thread to finish
-
 
 class KeyCombinationListener(QObject):
     def __init__(self, parent=None):
@@ -876,16 +809,31 @@ class Window(QDialog):
 
         self.repeaton = False
 
-        self.audioSelector = AudioDeviceSelector()
+        self._shutting_down = False
+        self.engine = MorseEngine(self.config)
+        self.engine_timer = QTimer(self)
+        self.engine_timer.setTimerType(Qt.PreciseTimer)
+        self.engine_timer.setInterval(2)
+        self.engine_timer.timeout.connect(self.advanceEngine)
+        self.audio = ToneAudio(self)
+        self.audio.error.connect(self.audioError)
+        self.audioSelector = AudioDeviceSelector(self.audio, self, self.config.get('audio_device', ''))
+        self.audioSelector.deviceChanged.connect(self.saveAudioDevice)
+        self.configureAudio()
         app = QApplication.instance()
         app.theme_manager.set_mode(self.config.get('theme', 'system'))
         app.theme_manager.themeChanged.connect(self.refreshTheme)
+        app.aboutToQuit.connect(self.shutdown)
 
     def load_default_config(self):
         return DEFAULT_CONFIG.copy()
 
     def init(self):
-        self.key_output.reset()
+        self.engine_timer.stop()
+        self.audio.stop()
+        self.engine = MorseEngine(self.config)
+        self.configureAudio()
+        self.resetOutput()
         self.currentCharacter = []
         self.previousCharacter = []
         self.repeaton = False
@@ -897,6 +845,7 @@ class Window(QDialog):
         self.layoutManager.set_active(preferred)
         logging.debug("[Window init] Active layout successfully set to: %s", self.layoutManager.active_layout_name)
         # Check for specific layout types that may require special handling
+        self.closePrediction()
         if self.layoutManager.get_active_layout().get('supports_prediction', False):
             self.abbreviations = load_abbreviations(os.path.join(user_data_dir,"abbreviations_en.txt"))
             self.typestate = TypeState(self.abbreviations)
@@ -950,6 +899,12 @@ class Window(QDialog):
         for key in ['keyone', 'keytwo', 'keythree'][:key_count]:
             config_key = self.config.get(key, default_keys[key])
             try:
+                if config_key in ('MOUSE_X1', 'MOUSE_X2'):
+                    key_codes.append('mouse:' + config_key[-2:].lower())
+                    continue
+                if config_key in {f'F{number}' for number in range(13, 25)}:
+                    key_codes.append(config_key.lower())
+                    continue
                 # Ensure keys are fetched in uppercase, which seems to be the format used in keystrokemap
                 key_code = self.keystrokemap[config_key.upper()].key_code
                 key_codes.append(key_code)
@@ -963,27 +918,64 @@ class Window(QDialog):
 
 
     def startKeyListener(self):
-        if self.config.get('off', False):
+        if self.config.get('off', False) or self._shutting_down:
             return
         key_codes = self.get_configured_keys()
         logging.debug(f"[Window startKeyListener] Configured keys: {key_codes}")
         if not self.listenerThread:
+            self.audio.prepare()
+            self.input_started_at = time.monotonic()
             self.listenerThread = KeyListenerThread(configured_keys=key_codes)
-            self.listenerThread.keyEvent.connect(self.handle_key_event)
+            self.listenerThread.timedKeyEvent.connect(self.handle_key_event)
+            self.listenerThread.listenerError.connect(self.inputError)
             self.listenerThread.start()
+            self.engine_timer.start()
 
 
     def updateAudioProperties(self):
-        if self.withSound.isChecked():
-            self.iconComboBoxSoundDit.setEnabled(True)
-            self.iconComboBoxSoundDah.setEnabled(True)
-        else:
-            self.iconComboBoxSoundDit.setEnabled(False)
-            self.iconComboBoxSoundDah.setEnabled(False)
+        self.config['withsound'] = self.withSound.isChecked()
+        self.configureAudio()
+
+    def configureAudio(self):
+        self.audio.configure(frequency=self.config.get('tone_frequency', 600),
+                             volume=self.config.get('tone_volume', 30) / 100,
+                             enabled=self.config.get('withsound', True),
+                             confirmation_enabled=self.config.get('confirmation_sound', False))
+        self.audio.set_device(self.config.get('audio_device') or None)
+
+    def previewAudioSettings(self, _value=None):
+        self.config['tone_frequency'] = self.toneFrequencyEdit.value()
+        self.config['tone_volume'] = self.toneVolumeEdit.value()
+        self.config['confirmation_sound'] = self.confirmationSoundCheck.isChecked()
+        self.configureAudio()
+
+    def saveAudioDevice(self, name):
+        self.config['audio_device'] = name
+        self.configManager.config['audio_device'] = name
+        self.configManager.save_config(self.configManager.config)
+
+    def audioError(self, message):
+        logging.error('Audio output: %s', message)
+        if self.codeslayoutview is not None and hasattr(self.codeslayoutview, 'showMessage'):
+            self.codeslayoutview.showMessage('音频不可用：' + message, False)
+
+    def inputError(self, message):
+        if self._shutting_down or (self.sender() is not None and self.sender() is not self.listenerThread):
+            return
+        logging.error('Input listener: %s', message)
+        self.backToSettings()
+        QMessageBox.warning(self, '输入设备不可用', message)
+
+    def closePrediction(self):
+        state, self.typestate = self.typestate, None
+        if state is not None and hasattr(state, 'presage'):
+            state.presage.close_database()
 
     def changeLayout(self, layout_name):
         if layout_name not in self.layoutManager.layouts:
             raise ValueError(f"Unknown layout: {layout_name}")
+        self.engine.reset()
+        self.audio.stop()
         for name in ('endCharacterTimer', 'fast_morse_mode_timer'):
             timer = getattr(self, name)
             if timer is not None:
@@ -1003,6 +995,7 @@ class Window(QDialog):
     def showCodeView(self):
         view_class = VirtualKeyboardView if self.layoutManager.active_layout_name == 'desktop' else CodesLayoutViewWidget
         view = view_class(self.layoutManager.get_active_layout(), self.config)
+        view.setParent(self, view.windowFlags())
         self.codeslayoutview = view
         view.setAvailableLayouts(self.layoutManager.layouts, self.layoutManager.active_layout_name)
         view.changeLayoutSignal.connect(self.changeLayout)
@@ -1063,7 +1056,7 @@ class Window(QDialog):
         predictions = self.typestate.getpredictions()
         if not 0 <= target < len(predictions):
             return
-        self.key_output.reset()
+        self.resetOutput()
         self.repeaton = False
         # Match the predictor's word boundary, preserving preceding punctuation.
         suffix = pressagio.tokenizer.ReverseTokenizer(self.typestate.text).next_token()
@@ -1082,6 +1075,7 @@ class Window(QDialog):
 
     def collect_config(self):
         config = {
+            **self.config,
             'theme': self.themeComboBox.currentData(),
             'guide_layout': self.guideLayoutComboBox.currentData(),
             'show_mouse': self.showMouseCheckBox.isChecked(),
@@ -1090,12 +1084,14 @@ class Window(QDialog):
             'keyone': self.iconComboBoxKeyOne.itemData(self.iconComboBoxKeyOne.currentIndex()),
             'keytwo': self.iconComboBoxKeyTwo.itemData(self.iconComboBoxKeyTwo.currentIndex()),
             'keythree': self.iconComboBoxKeyThree.itemData(self.iconComboBoxKeyThree.currentIndex()),
-            'maxDitTime': float(self.maxDitTimeEdit.text()),
-            'minLetterPause': float(self.minLetterPauseEdit.text()),
+            'maxDitTime': self.maxDitTimeEdit.value(),
+            'minLetterPause': self.minLetterPauseEdit.value(),
+            'keyer_mode': 'iambic' if self.fastMorseModeCheckbox.isChecked() else 'manual',
+            'wpm': self.wpmEdit.value(),
+            'tone_frequency': self.toneFrequencyEdit.value(),
+            'tone_volume': self.toneVolumeEdit.value(),
+            'confirmation_sound': self.confirmationSoundCheck.isChecked(),
             'withsound': self.withSound.isChecked(),
-            'SoundDit': self.iconComboBoxSoundDit.itemData(self.iconComboBoxSoundDit.currentIndex()),
-            'SoundDah': self.iconComboBoxSoundDah.itemData(self.iconComboBoxSoundDah.currentIndex()),
-            'SoundTyping': self.iconComboBoxSoundTyping.itemData(self.iconComboBoxSoundTyping.currentIndex()),
             'debug': self.withDebug.isChecked(),
             'off': False,
             'fontsizescale': float(self.fontSizeScaleEdit.text()),
@@ -1120,12 +1116,12 @@ class Window(QDialog):
                                     "输入按键不能重复，请为每个位置选择不同的按键。")
             return
 
-        self.iconComboBoxKeyOne.currentData()
-        if self.trayIcon.isVisible():
-            QMessageBox.information(self, "摩斯输入",
-                                    "程序将在系统托盘中运行。点击窗口的 × 可最小化，输入会继续运行。点击托盘图标可恢复窗口；需要关闭程序时，请在托盘菜单中选择<b>退出</b>。")
-            self.hide()
-        self.config = self.collect_config()
+        try:
+            self.config = self.collect_config()
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, '设置无效', '请检查字号和位置等数值设置。')
+            return
+        self.hide()
         self.onOffAction.setText("暂停输入")
         self.init()
         if not self.listenerThread:
@@ -1140,11 +1136,32 @@ class Window(QDialog):
         self.showMinimized()
 
     def quitApplication(self):
-        self.stopIt()
+        self.shutdown()
         self.audioSelector.hide()
         self.hide()
         self.trayIcon.hide()
         QApplication.instance().quit()
+
+    def shutdown(self):
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        for cleanup in (self.stopIt, self.closePrediction, self.resetOutput, self.audio.shutdown):
+            try:
+                cleanup()
+            except Exception:
+                logging.exception('Application cleanup failed: %s', cleanup.__name__)
+        logging.info('Input hooks, output state and audio stopped')
+
+    def resetOutput(self):
+        try:
+            self.key_output.reset()
+            return True
+        except Exception:
+            # A device/output failure must never prevent timers/audio/Qt
+            # objects from being stopped. Failed modifiers remain retryable.
+            logging.exception('Unable to release one or more output modifiers')
+            return False
 
     def setIcon(self):
         icon = QIcon(':/morse-writer.ico')
@@ -1195,6 +1212,8 @@ class Window(QDialog):
         # Filter the keystrokes to only include those keys that are specified in morse_keys
         morse_keys = ["SPACE", "ENTER", "ONE", "TWO", "Z", "F8", "F9", "RCTRL", "LCTRL", "RSHIFT", "LSHIFT", "ALT", "CTRL"]
         filtered_keystrokes = [(self.keystrokemap[key].label, self.keystrokemap[key].name) for key in morse_keys if key in self.keystrokemap]
+        filtered_keystrokes += [(f'F{number}', f'F{number}') for number in range(13, 25)]
+        filtered_keystrokes += [('鼠标 X1（侧键）', 'MOUSE_X1'), ('鼠标 X2（侧键）', 'MOUSE_X2')]
 
         # Set up the combo box for the first key using the filtered list
         self.iconComboBoxKeyOne = self.mkKeyStrokeComboBox(
@@ -1217,6 +1236,9 @@ class Window(QDialog):
         inputKeyComboBoxesLayout.addWidget(self.iconComboBoxKeyTwo)
         inputKeyComboBoxesLayout.addWidget(self.iconComboBoxKeyThree)
         inputSettingsLayout.addLayout(inputKeyComboBoxesLayout)
+        mapping_hint = QLabel('手柄映射推荐 F23 / F24；X1 / X2 也可用作输入键。')
+        mapping_hint.setWordWrap(True)
+        inputSettingsLayout.addWidget(mapping_hint)
 
         # Connect the radio buttons to updateFastMorseModeAvailability
         self.keySelectionRadioOneKey.toggled.connect(self.iconComboBoxKeyTwo.hide)
@@ -1233,23 +1255,37 @@ class Window(QDialog):
         for index, name in [[1,'One'], [2,'Two'], [3,'Three']]:
             getattr(self, 'keySelectionRadio%sKey'%(name)).setChecked(self.config.get('keylen', 1) == index)
 
-        maxDitTimeLabel = QLabel("点划分界时长（毫秒）：")
-        self.maxDitTimeEdit = QLineEdit(str(self.config.get("maxDitTime", "350")))
-        minLetterPauseLabel = QLabel("字符间隔（毫秒）：")
-        self.minLetterPauseEdit = QLineEdit(str(self.config.get("minLetterPause", "1000")))
+        maxDitTimeLabel = QLabel("单键点划分界：")
+        self.maxDitTimeEdit = QSpinBox()
+        self.maxDitTimeEdit.setRange(0, 5000)
+        self.maxDitTimeEdit.setSpecialValueText('自动（2 个点时长）')
+        self.maxDitTimeEdit.setSuffix(' 毫秒')
+        self.maxDitTimeEdit.setValue(round(float(self.config.get('maxDitTime', 0))))
+        minLetterPauseLabel = QLabel("字符确认间隔：")
+        self.minLetterPauseEdit = QSpinBox()
+        self.minLetterPauseEdit.setRange(0, 60000)
+        self.minLetterPauseEdit.setSpecialValueText('标准（3 个点时长）')
+        self.minLetterPauseEdit.setSuffix(' 毫秒')
+        self.minLetterPauseEdit.setValue(round(float(self.config.get('minLetterPause', 0))))
+        self.minLetterPauseEdit.setToolTip('设为 0 使用标准间隔；较大的数值增加输入容错。三键模式由第三键确认。')
+        self.wpmEdit = QSpinBox()
+        self.wpmEdit.setRange(5, 60)
+        self.wpmEdit.setValue(int(self.config.get('wpm', 15)))
+        self.wpmEdit.setSuffix(' WPM')
         TimingsLayout = QGridLayout()
-        TimingsLayout.addWidget(maxDitTimeLabel, 0, 0)
-        TimingsLayout.addWidget(self.maxDitTimeEdit, 0, 1, 1, 4)
-        TimingsLayout.addWidget(minLetterPauseLabel, 1, 0)
-        TimingsLayout.addWidget(self.minLetterPauseEdit, 1, 1, 2, 4)
-        TimingsLayout.setRowStretch(4, 1)
+        TimingsLayout.addWidget(QLabel('点划速度：'), 0, 0)
+        TimingsLayout.addWidget(self.wpmEdit, 0, 1)
+        TimingsLayout.addWidget(maxDitTimeLabel, 1, 0)
+        TimingsLayout.addWidget(self.maxDitTimeEdit, 1, 1)
+        TimingsLayout.addWidget(minLetterPauseLabel, 2, 0)
+        TimingsLayout.addWidget(self.minLetterPauseEdit, 2, 1)
         inputSettingsLayout.addLayout(TimingsLayout)
 
         self.withDebug = QCheckBox("启用调试")
         self.withDebug.setChecked(self.config.get("debug", False))
         inputSettingsLayout.addWidget(self.withDebug)
 
-        self.withSound = QCheckBox("播放提示音")
+        self.withSound = QCheckBox("播放摩斯音")
         self.withSound.setChecked(self.config.get("withsound", True))
         inputSettingsLayout.addWidget(self.withSound)
 
@@ -1295,40 +1331,33 @@ class Window(QDialog):
         inputSettingsLayout.addLayout(guide_options)
         self.fontSizeScaleEdit.setToolTip('关闭“码表自动适应窗口”后，可按此比例查看键位。')
 
-        self.iconComboBoxSoundDit = self.mkKeyStrokeComboBox([
-                ["点音", "res/dit_sound.wav"],  # Ensure the path is correct
-                ["默认", "res/dit_sound.wav"]  # Optional: default sound path
-            ], self.config.get('SoundDit', "res/dit_sound.wav"))
-
-        self.iconComboBoxSoundDah = self.mkKeyStrokeComboBox([
-            ["划音", "res/dah_sound.wav"],  # Ensure the path is correct
-            ["默认", "res/dah_sound.wav"]  # Optional: default sound path
-        ], self.config.get('SoundDah', "res/dah_sound.wav"))
-
-        self.iconComboBoxSoundTyping = self.mkKeyStrokeComboBox([
-            ["输入音", "res/typing_sound.wav"],
-            ["默认", "res/typing_sound.wav"]
-        ], self.config.get('SoundTyping', "res/typing_sound.wav"))
-
-
-        DitSoundLabel = QLabel("点音：")
-        DahSoundLabel = QLabel("划音：")
-        TypingSoundLabel = QLabel("输入音：")
+        self.toneFrequencyEdit = QSpinBox()
+        self.toneFrequencyEdit.setRange(200, 1200)
+        self.toneFrequencyEdit.setSuffix(' Hz')
+        self.toneFrequencyEdit.setValue(int(self.config.get('tone_frequency', 600)))
+        self.toneVolumeEdit = QSpinBox()
+        self.toneVolumeEdit.setRange(0, 100)
+        self.toneVolumeEdit.setSuffix(' %')
+        self.toneVolumeEdit.setValue(int(self.config.get('tone_volume', 30)))
+        self.confirmationSoundCheck = QCheckBox('字符完成与无效码提示音')
+        self.confirmationSoundCheck.setChecked(self.config.get('confirmation_sound', False))
         SoundConfigLayout = QGridLayout()
-        SoundConfigLayout.addWidget(DitSoundLabel, 0, 0)
-        SoundConfigLayout.addWidget(self.iconComboBoxSoundDit, 0, 1, 1, 4)
-        SoundConfigLayout.addWidget(DahSoundLabel, 1, 0)
-        SoundConfigLayout.addWidget(self.iconComboBoxSoundDah, 1, 1, 1, 4)
-        SoundConfigLayout.addWidget(TypingSoundLabel, 2, 0)
-        SoundConfigLayout.addWidget(self.iconComboBoxSoundTyping, 2, 1, 1, 4)
+        SoundConfigLayout.addWidget(QLabel('摩斯音高：'), 0, 0)
+        SoundConfigLayout.addWidget(self.toneFrequencyEdit, 0, 1)
+        SoundConfigLayout.addWidget(QLabel('音量：'), 1, 0)
+        SoundConfigLayout.addWidget(self.toneVolumeEdit, 1, 1)
+        SoundConfigLayout.addWidget(self.confirmationSoundCheck, 2, 0, 1, 2)
+        for control in (self.toneFrequencyEdit, self.toneVolumeEdit):
+            control.valueChanged.connect(self.previewAudioSettings)
+        self.confirmationSoundCheck.toggled.connect(self.previewAudioSettings)
 
         self.autostartCheckbox = QCheckBox("启动后自动开始输入")
         self.autostartCheckbox.setChecked(self.config.get("autostart", True))
         inputSettingsLayout.addWidget(self.autostartCheckbox)
 
         # Add Fast Morse Mode checkbox
-        self.fastMorseModeCheckbox = QCheckBox("快速摩斯模式")
-        self.fastMorseModeCheckbox.setChecked(self.config.get("fastMorseMode", False))
+        self.fastMorseModeCheckbox = QCheckBox("自动电键（长按连发、双键交替）")
+        self.fastMorseModeCheckbox.setChecked(self.config.get("keyer_mode", "manual") == "iambic")
         inputSettingsLayout.addWidget(self.fastMorseModeCheckbox)
 
         self.updateFastMorseModeAvailability()  # Initialize the state based on the current key mode
@@ -1382,7 +1411,11 @@ class Window(QDialog):
             self.fastMorseModeCheckbox.setEnabled(True)
 
     def saveSettings (self):
-        self.config = self.collect_config()
+        try:
+            self.config = self.collect_config()
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, '设置无效', '请检查字号和位置等数值设置。')
+            return
         self.configManager.save_config(self.config)
 
     def changeAudioDevice(self):
@@ -1401,8 +1434,18 @@ class Window(QDialog):
 
     def stopKeyListener(self):
         if self.listenerThread is not None:
-            self.listenerThread.stop()
+            listener = self.listenerThread
             self.listenerThread = None
+            listener.stop()
+            try:
+                listener.timedKeyEvent.disconnect(self.handle_key_event)
+                listener.listenerError.disconnect(self.inputError)
+            except (TypeError, RuntimeError):
+                pass
+            listener.deleteLater()
+        self.engine_timer.stop()
+        self.engine.reset()
+        self.audio.stop()
         for name in ('endCharacterTimer', 'fast_morse_mode_timer', 'repeat_character_timer'):
             timer = getattr(self, name)
             if timer is not None:
@@ -1411,7 +1454,7 @@ class Window(QDialog):
         self.currentCharacter = []
         self.lastKeyDownTime = None
         self.repeaton = False
-        self.key_output.reset()
+        self.resetOutput()
         if self.codeslayoutview is not None:
             self.codeslayoutview.reset()
             self.updateOutputState()
@@ -1421,6 +1464,7 @@ class Window(QDialog):
         self.stopKeyListener()
         if self.codeslayoutview is not None:
             self.codeslayoutview.hide()
+            self.codeslayoutview.deleteLater()
             self.codeslayoutview = None
         logging.debug("All components stopped.")
 
@@ -1449,167 +1493,132 @@ class Window(QDialog):
         self.trayIcon.setToolTip("摩斯输入")
         self.trayIcon.setContextMenu(self.trayIconMenu)
 
-    def handle_key_event(self, key, is_press, role):
-        if self.listenerThread is None or self.config.get('off', False):
-            return  # Ignore queued events after pausing or returning to settings.
-        # logging.debug(f"[handle_key_event] t={key}, Pressed={is_press}")
-        try:
-            if is_press:
-                self.on_press(key, role)
-            else:
-                self.on_release(key, role)
-        except Exception as e:
-            logging.warning(f"[handle_key_event] Error handling key event: {e}")
+    def handle_key_event(self, key, is_press, role, timestamp=None):
+        if self.listenerThread is None or self.config.get('off', False) or self._shutting_down:
+            return
+        sender = getattr(self, 'sender', lambda: None)()
+        if sender is not None and isinstance(sender, KeyListenerThread):
+            if sender is self.listenerThread:
+                self.drainInput()
+            return  # Signals wake the consumer; snapshots own the event data.
+        # A hook timestamps input before it waits in the Qt event queue.
+        now = time.monotonic() if timestamp is None else timestamp
+        if now < getattr(self, 'input_started_at', 0):
+            return
+        self.processEngineEvents(self.engine.key(role, is_press, now))
 
+    def advanceEngine(self):
+        if self.listenerThread is not None and not self.config.get('off', False):
+            self.drainInput()
+
+    def drainInput(self):
+        listener = self.listenerThread
+        if listener is None:
+            return
+        cutoff, events = listener.snapshot_events()
+        for key, is_press, role, timestamp in events:
+            if listener is not self.listenerThread or self.config.get('off', False):
+                return
+            if timestamp >= self.input_started_at:
+                self.processEngineEvents(self.engine.key(role, is_press, timestamp))
+        if listener is self.listenerThread:
+            self.processEngineEvents(self.engine.tick(cutoff))
+
+    def processEngineEvents(self, events):
+        for kind, payload in events:
+            if kind == 'tone':
+                self.audio.set_tone(payload['on'])
+            elif kind == 'symbol':
+                self.addDit() if payload['symbol'] == 1 else self.addDah()
+            elif kind == 'commit':
+                view = self.codeslayoutview
+                self.endCharacter()
+                # A new key can commit the old character and begin the next in
+                # one batch. Only discard it if the action switched surfaces.
+                if self.codeslayoutview is not view:
+                    return
+            elif kind == 'feedback':
+                view = self.codeslayoutview
+                if view is not None and hasattr(view, 'setInputFeedback'):
+                    names = {0: 'straight' if payload.get('mode') == 'straight' else 'dot',
+                             1: 'dash', 2: 'commit'}
+                    held = tuple(names[role] for role in payload['held'])
+                    view.setInputFeedback(held, payload['progress'], payload.get('sounding'))
+            elif kind == 'reset':
+                self.audio.stop()
+                self.currentCharacter = []
+                if self.codeslayoutview is not None:
+                    self.codeslayoutview.reset()
+                    if payload.get('reason') in ('timing_overrun', 'late_input') and hasattr(self.codeslayoutview, 'showMessage'):
+                        self.codeslayoutview.showMessage('输入已重置，请松开按键后继续', False)
 
     def on_press(self, key, role):
-        try:
-            if self.repeat_character_timer:
-                self.repeat_character_timer.stop()
-                self.repeat_character_timer = None
-
-            # Handle disable toggle (adapt keys according to your config)
-            if self.check_disable_combination(key):
-                self.inputDisabled = not self.inputDisabled
-                return
-
-            if self.inputDisabled:
-                return  # Ignore input if disabled
-
-            # Prevent processing if key is already considered 'down'
-            if self.lastKeyDownTime is not None:
-                return
-
-            # Start timing the key press
-            self.lastKeyDownTime = time.time()
-            logging.debug(f"[Window on_press] Key pressed: {key}")
-
-            if self.config.get('fastMorseMode', False) and not self.keySelectionRadioOneKey.isChecked():
-                self.fast_morse_mode_timer = QTimer(self)
-                self.fast_morse_mode_timer.timeout.connect(lambda: self.repeat_key(key, role))
-                self.fast_morse_mode_timer.start(100)  # Adjust the interval as needed
-
-            if not self.keySelectionRadioOneKey.isChecked():
-                # Check for dit or dah or end based on role
-                if role == 0:
-                    self.addDit()
-                elif role == 1:
-                    self.addDah()
-                elif role == 2:
-                    self.endCharacter()
-
-        except Exception as e:
-            logging.warning(f"[on_press] Error on key press: {e}")
-
-    def repeat_key(self, key, role):
-        if role == 0:
-            self.addDit()
-        elif role == 1:
-            self.addDah()
-        elif role == 2:
-            self.endCharacter()
-
-
-    def check_disable_combination(self, key):
-        # Example logic, replace with actual keys and states
-        return key == 'P' and self.key_state['CTRL'] and self.key_state['SHIFT']
+        self.handle_key_event(key, True, role)
 
     def on_release(self, key, role):
-        try:
-            if self.fast_morse_mode_timer:
-                self.fast_morse_mode_timer.stop()
-                self.fast_morse_mode_timer = None
-
-            if self.lastKeyDownTime is not None:
-                duration = (time.time() - self.lastKeyDownTime) * 1000  # Duration in milliseconds
-                self.lastKeyDownTime = None  # Reset key down time
-
-                if self.keySelectionRadioOneKey.isChecked():
-                    # Check for dit or dah based on duration
-                    maxDitTime = float(self.config.get('maxDitTime', 350))
-                    if duration < maxDitTime:
-                        self.addDit()
-                    else:
-                        self.addDah()
-
-                if self.keySelectionRadioOneKey.isChecked() or self.keySelectionRadioTwoKey.isChecked():
-                    # Start timer for end character sequence
-                    self.startEndCharacterTimer()
-
-                logging.debug(f"[Window on_release] Key released: {key}, duration: {duration}ms")
-
-        except Exception as e:
-            logging.warning(f"[on_release] Error on key release: {e}")
-
+        self.handle_key_event(key, False, role)
 
     def addDit(self):
         self.currentCharacter.append(1)
-        if self.config['withsound']:
-            # play("res/dit_sound.wav") #nava
-            self.audioSelector.play_audio("res/dit_sound.wav")
-        self.codeslayoutview.Dit()
+        if self.codeslayoutview is not None:
+            self.codeslayoutview.Dit()
 
     def addDah(self):
         self.currentCharacter.append(2)
-        if self.config['withsound']:
-            # play("res/dah_sound.wav") #nava
-            self.audioSelector.play_audio("res/dah_sound.wav")
-        self.codeslayoutview.Dah()
-
+        if self.codeslayoutview is not None:
+            self.codeslayoutview.Dah()
 
     def startEndCharacterTimer(self):
-        if self.endCharacterTimer is not None:
-            self.endCharacterTimer.stop()  # Stop existing timer
-        self.endCharacterTimer = QTimer()
-        self.endCharacterTimer.setSingleShot(True)
-        self.endCharacterTimer.timeout.connect(self.endCharacter)
-        self.endCharacterTimer.start(int(self.config['minLetterPause']))  # Configure delay from settings
-        logging.debug(f"[startEndCharacter] Timer restarted with a delay of {self.config['minLetterPause']} ms")
-
+        # Compatibility for callers requesting an explicit delayed commit.
+        if self.endCharacterTimer is None:
+            self.endCharacterTimer = QTimer(self)
+            self.endCharacterTimer.setSingleShot(True)
+            self.endCharacterTimer.timeout.connect(self.endCharacter)
+        self.endCharacterTimer.start(int(self.config.get('minLetterPause') or 3600 / self.config.get('wpm', 15)))
 
     def endCharacter(self):
         if self.endCharacterTimer is not None:
             self.endCharacterTimer.stop()
+            self.endCharacterTimer.deleteLater()
             self.endCharacterTimer = None
-        character = self.currentCharacter
-        self.currentCharacter = []
-        self.handleMorseCode(character)
+        character, self.currentCharacter = self.currentCharacter, []
+        success, label = self.handleMorseCode(character)
         if self.codeslayoutview is not None:
             self.codeslayoutview.reset()
+            if character and hasattr(self.codeslayoutview, 'showResult'):
+                if success:
+                    self.codeslayoutview.showResult(label, True)
+                else:
+                    self.codeslayoutview.showMessage(label, False)
             self.updateOutputState()
+        if character:
+            self.audio.confirm(success)
 
     def enableRepeatMode(self):
         self.repeaton = self.key_output.toggle_lock_mode()
         self.updateOutputState()
 
     def handleMorseCode(self, character):
-        morse_code = "".join(str(char) for char in character)
-        if morse_code == "":
-            logging.warning(f"[handleMorseCode] No action found for Morse code: {morse_code}")
-            return
-
+        morse_code = ''.join(str(symbol) for symbol in character)
+        if not morse_code:
+            return False, ''
         try:
-            active_layout = self.layoutManager.get_active_layout()
-            items = active_layout.get('items', [])
+            items = self.layoutManager.get_active_layout().get('items', [])
             item = next((item for item in items if item.get('code') == morse_code), None)
-
-            if item and '_action' in item:
-                action = item['_action']
-                if hasattr(action, 'perform') and callable(action.perform):
-                    action.perform()
-                    logging.info(f"[handleMorseCode] Action performed for Morse code: {morse_code}")
-                    if self.config['withsound']:
-                        # play(self.config.get('SoundTyping', 'res/typing_sound.wav'))  # Play typing sound
-                        self.audioSelector.play_audio(self.config.get('SoundTyping', 'res/typing_sound.wav'))
-                else:
-                    logging.error(
-                        f"[handleMorseCode] '_action' does not have a callable 'perform' method for Morse code: {morse_code}")
-            else:
-                logging.warning(f"[handleMorseCode] No action found for Morse code: {morse_code}")
-        except Exception as e:
-            logging.error(f"[handleMorseCode] Failed to perform action for Morse code: {morse_code}. Error: {e}")
-            self.key_output.reset()
+            if item is None or '_action' not in item:
+                return False, '无效码：' + morse_code.replace('1', '•').replace('2', '—')
+            action = item['_action']
+            label = action.getlabel()
+            if item.get('action') == 'PREDICTION_SELECT' and not label:
+                return False, '该候选暂无可用词语'
+            action.perform()
+            logging.debug('Completed Morse action: %s', item.get('action'))
+            return True, label or item.get('action', '')
+        except Exception:
+            logging.exception('Failed to perform Morse action')
+            self.resetOutput()
             self.repeaton = False
+            return False, '执行失败，请查看诊断日志'
         finally:
             self.updateOutputState()
 
@@ -1915,6 +1924,9 @@ class CustomApplication(QApplication):
 if __name__ == '__main__':
     user_data_dir = get_user_data_dir()
     os.makedirs(user_data_dir, exist_ok=True)
+    from crash_diagnostics import install_diagnostics, log_qt_message
+    install_diagnostics(user_data_dir)
+    QtCore.qInstallMessageHandler(log_qt_message)
     app = CustomApplication(sys.argv)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -1929,7 +1941,6 @@ if __name__ == '__main__':
 
     # Create main window
     window = Window(layoutManager=layoutmanager, configManager=configmanager)
-    app.aboutToQuit.connect(window.stopIt)
 
     # Now that we have the window, initialize actions that may require window reference
     actions = configmanager.initActions(window)
@@ -1946,4 +1957,9 @@ if __name__ == '__main__':
         window.show()
 
     # Start the application event loop
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    window.shutdown()
+    # Destroy Qt wrappers while QApplication and Python are still alive.
+    window.deleteLater()
+    app.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+    sys.exit(exit_code)

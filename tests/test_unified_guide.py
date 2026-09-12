@@ -125,6 +125,61 @@ class UnifiedGuideTests(TestCase):
         for heading in headings:
             self.assertGreaterEqual(heading.height(), heading.fontMetrics().height() + 4)
 
+    def test_feedback_updates_do_not_refresh_keycaps_and_result_survives_reset(self):
+        view = self.window.codeslayoutview
+        first_cap = next(iter(view.crs.values()))
+        with patch.object(first_cap, 'updateView', wraps=first_cap.updateView) as redraw:
+            for tick in range(101):
+                view.setInputFeedback(('dot', 'dash'), tick / 100, sounding='dash')
+            redraw.assert_not_called()
+        panel = view.input_feedback
+        self.assertEqual(panel._roles, frozenset(('dot', 'dash')))
+        self.assertEqual(panel.progress.value(), 1000)
+        view.showResult('A')
+        view.reset()
+        view.Dit()
+        self.assertEqual(panel.result_label._full_text, '已输入：A')
+        self.assertEqual(view.input_label._full_text, '•')
+        self.assertEqual(panel.progress.value(), 0)
+        view.showResult('••••••••', False)
+        self.assertIn('无效码', panel.result_label._full_text)
+        self.assertTrue(panel.result_timer.isActive())
+        panel.result_timer.timeout.emit()
+        self.assertEqual(panel.result_label._full_text, '最近输入将显示在这里')
+
+    def test_feedback_and_return_controls_fit_small_window_with_long_results(self):
+        # This checks geometry for a supplied state, not the live keyer tick.
+        self.window.engine_timer.stop()
+        view = self.window.codeslayoutview
+        view.resize(360, 280)
+        view.setInputFeedback(('straight',), .42, sounding='straight')
+        view.showResult('a long candidate ' * 40)
+        self.app.processEvents()
+        self.assertEqual((view.width(), view.height()), (360, 280))
+        for widget in (view.input_feedback, view.settings_button, view.view_options, view.status_bar):
+            rectangle = QRect(widget.mapTo(view, QPoint(0, 0)), widget.size())
+            self.assertTrue(view.rect().contains(rectangle), (widget, rectangle))
+        self.assertGreater(view.scroll_area.height(), 10)
+        panel = view.input_feedback
+        self.assertEqual(panel.dot_label.text(), '• 按住')
+        self.assertEqual(panel.progress.value(), 420)
+        self.assertIn('long candidate', panel.result_label.toolTip())
+        self.assertTrue(panel.result_label.text().endswith('…'))
+
+    def test_feedback_messages_keep_complete_error_text_without_morse_prefix(self):
+        view = self.window.codeslayoutview
+        panel = view.input_feedback
+        for message in ('无效码：••••••••', '音频不可用：请检查输出设备'):
+            view.showMessage(message, success=False)
+            self.assertEqual(panel.result_label._full_text, message)
+            self.assertFalse(panel._result_success)
+            self.assertTrue(panel.result_timer.isActive())
+        view.showMessage('已暂停')
+        self.assertEqual(panel.result_label._full_text, '已暂停')
+        self.assertTrue(panel._result_success)
+        view.showResult('Enter')
+        self.assertEqual(panel.result_label._full_text, '已输入：Enter')
+
     def test_candidate_slots_keep_numbers_case_and_live_availability(self):
         view = self.window.codeslayoutview
         view.resize(1280, 780)
@@ -217,7 +272,7 @@ class UnifiedGuideTests(TestCase):
 
     def test_changing_theme_preserves_previously_saved_settings(self):
         self.window.guideLayoutComboBox.setCurrentIndex(self.window.guideLayoutComboBox.findData('mouse'))
-        self.window.minLetterPauseEdit.setText('1234')
+        self.window.minLetterPauseEdit.setValue(1234)
         self.window.saveSettings()
         for choice in ('light', 'dark'):
             self.window.themeComboBox.setCurrentIndex(self.window.themeComboBox.findData(choice))

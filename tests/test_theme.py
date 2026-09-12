@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtTest import QSignalSpy
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QDialog, QWidget
 
 import ui_theme
 
@@ -150,6 +151,76 @@ class ThemeTests(unittest.TestCase):
             ui_theme.apply_theme(self.app, "light")
             ui_theme.apply_theme(self.app, "dark")
             self.assertEqual(self.app.font().pointSizeF(), 11.0)
+
+    def test_native_titlebar_never_creates_an_hwnd_or_uses_deleted_widgets(self):
+        from PyQt5 import sip
+
+        widget = QWidget()
+        titlebars = self.app._morse_titlebar_theme
+        with patch.object(self.app, 'platformName', return_value='windows'), \
+                patch.object(ui_theme.sys, 'platform', 'win32'), \
+                patch('ui_theme._set_windows_titlebar') as native:
+            titlebars.eventFilter(widget, QEvent(QEvent.WinIdChange))
+            self.assertFalse(widget.testAttribute(Qt.WA_WState_Created))
+            native.assert_not_called()
+            sip.delete(widget)
+            titlebars.applyWindow(widget)
+            native.assert_not_called()
+
+    def test_native_titlebar_tracks_existing_and_new_dialog_theme(self):
+        widget = QDialog()
+        widget.setAttribute(Qt.WA_DontShowOnScreen)
+        widget.show()
+        self.app.processEvents()
+        titlebars = self.app._morse_titlebar_theme
+        with patch.object(self.app, 'platformName', return_value='windows'), \
+                patch.object(ui_theme.sys, 'platform', 'win32'), \
+                patch('ui_theme._set_windows_titlebar') as native:
+            self.app.setProperty('resolvedTheme', 'dark')
+            titlebars.eventFilter(widget, QEvent(QEvent.Show))
+            native.assert_called_with(int(widget.effectiveWinId()), True)
+            self.app.setProperty('resolvedTheme', 'light')
+            titlebars.eventFilter(widget, QEvent(QEvent.WinIdChange))
+            native.assert_called_with(int(widget.effectiveWinId()), False)
+            native.reset_mock()
+            widget.setWindowFlag(Qt.FramelessWindowHint)
+            titlebars.applyWindow(widget)
+            native.assert_not_called()
+        widget.hide()
+        widget.deleteLater()
+
+    def test_dwm_uses_pointer_sized_handles_and_windows_11_caption_colors(self):
+        import ctypes
+        from ctypes import wintypes
+
+        library = MagicMock()
+        dwm = library.dwmapi.DwmSetWindowAttribute
+        dwm.return_value = 0
+        handle = 0x100001234
+        with patch.object(ctypes, 'windll', library, create=True), \
+                patch.object(ui_theme.sys, 'getwindowsversion', return_value=Mock(build=22631), create=True):
+            self.assertTrue(ui_theme._set_windows_titlebar(handle, True))
+        self.assertEqual(dwm.argtypes[0], wintypes.HWND)
+        self.assertEqual(dwm.restype, wintypes.LONG)
+        self.assertEqual([args[0][1] for args in dwm.call_args_list], [20, 35, 36])
+        self.assertTrue(all(args[0][0] == handle for args in dwm.call_args_list))
+        self.assertEqual(dwm.call_args_list[0][0][2]._obj.value, 1)
+        color = QColor(ui_theme.THEMES['dark']['background'])
+        self.assertEqual(dwm.call_args_list[1][0][2]._obj.value,
+                         color.red() | color.green() << 8 | color.blue() << 16)
+
+    def test_dwm_older_version_falls_back_and_failure_is_nonfatal(self):
+        import ctypes
+
+        library = MagicMock()
+        dwm = library.dwmapi.DwmSetWindowAttribute
+        dwm.side_effect = [-1, 0]
+        with patch.object(ctypes, 'windll', library, create=True), \
+                patch.object(ui_theme.sys, 'getwindowsversion', return_value=Mock(build=18362), create=True):
+            self.assertTrue(ui_theme._set_windows_titlebar(1234, False))
+            self.assertEqual([args[0][1] for args in dwm.call_args_list], [20, 19])
+            dwm.side_effect = OSError('DWM unavailable')
+            self.assertFalse(ui_theme._set_windows_titlebar(1234, True))
 
 
 if __name__ == "__main__":
