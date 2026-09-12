@@ -150,6 +150,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             repeat_character_timer=Mock(), currentCharacter=[1, 2],
             lastKeyDownTime=123, repeaton=True, showNormal=Mock(),
             onOffAction=Mock(),
+            key_output=Mock(), updateOutputState=Mock(),
             get_configured_keys=Mock(return_value=["space"]),
             on_press=Mock(), on_release=Mock(),
         )

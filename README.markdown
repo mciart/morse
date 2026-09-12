@@ -42,10 +42,15 @@ pyinstaller MorseCodeGUI.spec
 * 托盘菜单中的“暂停输入”恢复普通键盘输入，“继续输入”重新启用摩斯输入。“打开设置”会停止输入并返回设置窗口。
 * 需要关闭程序时，在托盘菜单中选择“退出”，程序会释放键盘监听。
 * 码表窗口获得焦点时，Ctrl+Shift+P 可返回设置。
+* 码表默认打开完整的“主键盘”页，包含字母、数字、标点、F1–F12、方向键及控制键；可使用页面选择器或切页编码进入“字母”“鼠标”“数字”页。相同编码在不同页面可能表示不同动作，请按当前页面的引导输入。
+* 单次组合键：先输入 Ctrl，再输入 V，执行一次 Ctrl+V 后自动释放 Ctrl；Shift、Alt 和 Windows 键同样可与后续按键组合。
+* 缩写仅在字母与候选页输入空格完成单词后展开；主键盘和数字页保持原字符输出。候选词和缩写保留原有大小写。
+* 连续组合键：先输入“修饰键锁定”，再输入 Ctrl 和 V，可保持 Ctrl 继续操作；再次输入“修饰键锁定”会关闭锁定并释放修饰键。该开关不自动重复上一个动作。
+* “左向Tab”执行 Shift+Tab；“开始菜单”打开开始菜单，“应用菜单”打开当前项目的上下文菜单。
 
 **Tips for first use**
 
-* Look at the the code chart below or the coding window. Have it handy or print it!
+* 使用 [完整码表](codechart.md) 或软件内的码表引导查看当前页面的编码。
 * Use notepad to test your typing skills
 * To get used to typing you have to first get used to the speed of things. Just try a e and a t for starters. 
 * Getting auditory feedback on the key entered may be useful. In this case you may find [this additional program](https://github.com/willwade/Scripting-Recipes-for-AT/tree/master/Autohotkey/SoundingKeyboardMouse#keyboard-sounder) of use. 
@@ -86,252 +91,11 @@ Please contact me if you intend to fork this or do anything fun with it - will A
 
 Enjoy!
 
-<table border="0" cellspacing="0" cellpadding="0">
-    <tr>
-        <th colspan="6">MorseWriter Key Codes</th>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        A<br />&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        B<br />&mdash;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        C<br />&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        D<br />&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        E<br />&bull;<br />  </td>
-        <td style="white-space: nowrap"> <br />
-        F<br />&bull;&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        G<br />&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        H<br />&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        I<br />&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        J<br />&bull;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        K<br />&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        L<br />&bull;&mdash;&bull;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        M<br />&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        N<br />&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        O<br />&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        P<br />&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Q<br />&mdash;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        R<br />&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        S<br />&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        T<br />             &mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        U<br />&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        V<br />&bull;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        W<br />&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        X<br />&mdash;&bull;&bull;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Y<br />&mdash;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Z<br />&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        1<br />&bull;&mdash;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        2<br />&bull;&bull;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        3<br />&bull;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        4<br />&bull;&bull;&bull;&bull;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        5<br />&bull;&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        6<br />&mdash;&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        7<br />&mdash;&mdash;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        8<br />&mdash;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        9<br />&mdash;&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        0<br />&mdash;&mdash;&mdash;&mdash;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-           .<br />&bull;&mdash;&bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        ,<br />&mdash;&mdash;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        &#8204;<br />&bull;&bull;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        !<br />&bull;&mdash;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        :<br />&mdash;&bull;&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        ;<br />&bull;&bull;&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        @<br />    &bull;&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        #<br />     &mdash;&bull;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        $<br />&mdash;&bull;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        %<br />&bull;&mdash;&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        &<br />&mdash;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        &lowast;<br />&bull;&mdash;&bull;&bull;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        +<br />&bull;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        &mdash;<br />&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        =<br />&bull;&mdash;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        /<br />&mdash;&mdash;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-         \<br />&mdash;&bull;&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        &apos;<br />&bull;&mdash;&bull;&mdash;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        &quot;<br />&mdash;&mdash;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        (<br />&bull;&bull;&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        )<br />&mdash;&bull;&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        <<br />&bull;&mdash;&bull;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-         ><br />&mdash;&mdash;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        ^<br />&mdash;&bull;&mdash;&bull;&bull;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Enter <br />
-        &bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Space <br />
-          <br />&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Back<br /> Space <br />
-        &mdash;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Tab <br />
-        &mdash;&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Tab<br /> Left <br />
-        &mdash;&mdash;&bull;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Uderscore<br /> <br />
-        &bull;&bull;&mdash;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Page<br /> Up <br />
-        &mdash;&mdash;&mdash;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Page<br /> Dwn <br />
-        &mdash;&mdash;&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Left<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Right<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Up<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Down<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&mdash;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Escape <br />
-        &bull;&bull;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Home <br />
-        &bull;&bull;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        End <br />
-        &mdash;&bull;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Insert <br />
-        &bull;&mdash;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Delete <br />
-        &mdash;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Start<br /> Menu <br />
-        &mdash;&mdash;&bull;&bull;&bull;&bull; </td>
-    </tr>
-    <tr>
-        <th  colspan="6"> 
-            Modifier Keys
-        </th>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Shift <br />
-        &bull;&bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Alt <br />
-        &bull;&mdash;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Ctrl <br />
-        &mdash;&bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Windows <br />
-        &bull;&bull;&mdash;&bull;&mdash;&mdash; </td>
-        <td  colspan="3"> <br />
-        Application<br /> Key <br />
-        &mdash;&bull;&bull;&bull;&mdash;&mdash; </td>
-    </tr>
-    <tr>
-        <th colspan="6"> 
-            Command Keys
-        </th>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Caps Lock <br />
-        &bull;&bull;&mdash;&bull;&mdash;&bull; </td>
-        <td colspan="5"> <br />
-        Repeat Mode* <br />
-        &bull;&mdash;&bull;&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td  colspan="6"><b>Function Keys</b><br />
-        F1 &mdash; F10<br /> dot + number (F1 = &bull;&bull;&mdash;&mdash;&mdash;&mdash;)<br />F11 &amp; F12<br /> dash + number (F11 =&mdash;&bull;&mdash;&mdash;&mdash;&mdash;) </td>
-    </tr>
-</table>
+**完整摩斯码表**
 
-\*NB: To type Control+V you need to first go into repeat mode, then type Control and then type V. To release the CTRL, press repeat again
+[查看与软件同步的中文完整码表](codechart.md)。码表从软件实际使用的配置和动作名称自动生成，覆盖主键盘、字母、鼠标、数字四个页面。
+
+维护时执行 `python tools/generate_codechart.py` 更新码表，执行 `python tools/generate_codechart.py --check` 检查是否与软件一致。
 
 ## License
 

@@ -62,7 +62,7 @@
             { "code": "1122", "action": "SPACE" },
             { "code": "2222", "action": "BACKSPACE" },
             { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "主键盘" },
-            { "code": "121121", "action": "REPEATMODE", "label": "重复"}
+            { "code": "121121", "action": "REPEATMODE", "label": "修饰键锁定"}
         ]
     },
     "main": {
@@ -133,7 +133,7 @@
         { "code": "1122", "action": "SPACE" },
         { "code": "2222", "action": "BACKSPACE" },
         { "code": "21221", "action": "TAB" },
-        { "code": "221211", "action": "TAB" },
+        { "code": "221211", "action": "TABLEFT" },
         { "code": "11221", "action": "UNDERSCORE" },
         { "code": "222112", "action": "PAGEUP" },
         { "code": "222121", "action": "PAGEDOWN" },
@@ -146,15 +146,17 @@
         { "code": "21211", "action": "END" },
         { "code": "12112", "action": "INSERT" },
         { "code": "21121", "action": "DELETE" },
+        { "code": "221111", "action": "STARTMENU" },
         { "code": "11212", "action": "SHIFT" },
         { "code": "12122", "action": "ALT" },
         { "code": "21212", "action": "CTRL" },
         { "code": "112122", "action": "WINDOWS" },
+        { "code": "211122", "action": "APPLICATION" },
         { "code": "112121", "action": "CAPSLOCK" },
         { "code": "22121", "action": "CHANGELAYOUT", "target": "mouse", "label": "鼠标" },
         { "code": "21112", "action": "CHANGELAYOUT", "target": "number", "label": "数字" },
         { "code": "111211", "action": "CHANGELAYOUT", "target": "typing", "label": "字母" },
-        { "code": "121121", "action": "REPEATMODE", "label": "重复"},
+        { "code": "121121", "action": "REPEATMODE", "label": "修饰键锁定"},
         { "code": "121211", "action": "SOUND" },
         { "code": "22212", "action": "CODESET" },
         { "code": "112222", "action": "F1" },
@@ -207,7 +209,7 @@
         { "code": "2222", "action": "MOUSEDBLCLICKRIGHT" },
         { "code": "11111", "action": "MOUSECLKHLDRIGHT" },
         { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "主键盘" },
-        { "code": "121121", "action": "REPEATMODE", "label": "重复"}
+        { "code": "121121", "action": "REPEATMODE", "label": "修饰键锁定"}
       ]
     },
     "number": {
@@ -234,5 +236,5 @@
       ]
     }
   },
-  "mainlayout": "typing"
+  "mainlayout": "main"
 }

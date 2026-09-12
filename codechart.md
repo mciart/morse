@@ -1,249 +1,246 @@
-# CodeChart
+# 摩斯输入完整码表
 
+<!-- 由 tools/generate_codechart.py 自动生成，请勿手动修改表格。 -->
 
-<table border="0" cellspacing="0" cellpadding="0">
-    <tr>
-        <th colspan="6">MorseWriter Key Codes</th>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        A<br />&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        B<br />&mdash;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        C<br />&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        D<br />&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        E<br />&bull;<br />  </td>
-        <td style="white-space: nowrap"> <br />
-        F<br />&bull;&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        G<br />&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        H<br />&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        I<br />&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        J<br />&bull;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        K<br />&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        L<br />&bull;&mdash;&bull;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        M<br />&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        N<br />&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        O<br />&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        P<br />&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Q<br />&mdash;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        R<br />&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        S<br />&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        T<br />             &mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        U<br />&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        V<br />&bull;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        W<br />&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        X<br />&mdash;&bull;&bull;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Y<br />&mdash;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Z<br />&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        1<br />&bull;&mdash;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        2<br />&bull;&bull;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        3<br />&bull;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        4<br />&bull;&bull;&bull;&bull;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        5<br />&bull;&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        6<br />&mdash;&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        7<br />&mdash;&mdash;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        8<br />&mdash;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        9<br />&mdash;&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        0<br />&mdash;&mdash;&mdash;&mdash;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-           .<br />&bull;&mdash;&bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        ,<br />&mdash;&mdash;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        &#8204;<br />&bull;&bull;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        !<br />&bull;&mdash;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        :<br />&mdash;&bull;&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        ;<br />&bull;&bull;&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        @<br />    &bull;&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        #<br />     &mdash;&bull;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        $<br />&mdash;&bull;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        %<br />&bull;&mdash;&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        &<br />&mdash;&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        &lowast;<br />&bull;&mdash;&bull;&bull;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        +<br />&bull;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        &mdash;<br />&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        =<br />&bull;&mdash;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        /<br />&mdash;&mdash;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-         \<br />&mdash;&bull;&bull;&bull;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        &apos;<br />&bull;&mdash;&bull;&mdash;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        &quot;<br />&mdash;&mdash;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        (<br />&bull;&bull;&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        )<br />&mdash;&bull;&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        <<br />&bull;&mdash;&bull;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-         ><br />&mdash;&mdash;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        ^<br />&mdash;&bull;&mdash;&bull;&bull;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Enter <br />
-        &bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Space <br />
-          <br />&bull;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Back<br /> Space <br />
-        &mdash;&mdash;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Tab <br />
-        &mdash;&bull;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Tab<br /> Left <br />
-        &mdash;&mdash;&bull;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Uderscore<br /> <br />
-        &bull;&bull;&mdash;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Page<br /> Up <br />
-        &mdash;&mdash;&mdash;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Page<br /> Dwn <br />
-        &mdash;&mdash;&mdash;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Left<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Right<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Up<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Down<br /> Arrow <br />
-        &mdash;&mdash;&mdash;&mdash;&mdash;&mdash; </td>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Escape <br />
-        &bull;&bull;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Home <br />
-        &bull;&bull;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        End <br />
-        &mdash;&bull;&mdash;&bull;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Insert <br />
-        &bull;&mdash;&bull;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Delete <br />
-        &mdash;&bull;&bull;&mdash;&bull; </td>
-        <td style="white-space: nowrap"> <br />
-        Start<br /> Menu <br />
-        &mdash;&mdash;&bull;&bull;&bull;&bull; </td>
-    </tr>
-    <tr>
-        <th  colspan="6"> 
-            Modifier Keys
-        </th>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Shift <br />
-        &bull;&bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Alt <br />
-        &bull;&mdash;&bull;&mdash;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Ctrl <br />
-        &mdash;&bull;&mdash;&bull;&mdash; </td>
-        <td style="white-space: nowrap"> <br />
-        Windows <br />
-        &bull;&bull;&mdash;&bull;&mdash;&mdash; </td>
-        <td  colspan="3"> <br />
-        Application<br /> Key <br />
-        &mdash;&bull;&bull;&bull;&mdash;&mdash; </td>
-    </tr>
-    <tr>
-        <th colspan="6"> 
-            Command Keys
-        </th>
-    </tr>
-    <tr>
-        <td style="white-space: nowrap"> <br />
-        Caps Lock <br />
-        &bull;&bull;&mdash;&bull;&mdash;&bull; </td>
-        <td colspan="5"> <br />
-        Repeat Mode* <br />
-        &bull;&mdash;&bull;&bull;&mdash;&bull; </td>
-    </tr>
-    <tr>
-        <td  colspan="6"><b>Function Keys</b><br />
-        F1 &mdash; F10<br /> dot + number (F1 = &bull;&bull;&mdash;&mdash;&mdash;&mdash;)<br />F11 &amp; F12<br /> dash + number (F11 =&mdash;&bull;&mdash;&mdash;&mdash;&mdash;) </td>
-    </tr>
-</table>
+编码和页面来自 [软件码表配置](user_data/layouts.json)，动作名称来自 [软件动作定义](MorseCodeGUI.py)。此表包含所有页面的可用编码。
 
-\*NB:To type Control+V you need to first go into repeat mode then type V.
+`•` 表示点，`—` 表示划。编码按当前页面解释；切换页面后，同一编码可能执行不同动作。标点和控制键使用本软件约定的编码。
+
+默认显示“主键盘”完整页面。可在码表窗口的页面选择器中切页，也可输入各页列出的切换编码。字母页的候选项会根据输入动态更新，仅有候选词时可用。缩写仅在字母页输入空格完成单词后展开；主键盘和数字页保持原字符输出。
+
+组合键：先输入 Ctrl，再输入 V，即执行一次 Ctrl+V，随后自动释放 Ctrl。需要连续组合键时，先开启“修饰键锁定”，再输入 Ctrl 和 V；再次输入“修饰键锁定”会关闭锁定并释放修饰键。该开关不自动重复上一个动作。
+
+## 主键盘（默认）
+
+本页共 102 项。以下编码仅在“主键盘”页生效。
+
+| 按键或操作 | 摩斯码 |
+| --- | --- |
+| a | `•—` |
+| b | `—•••` |
+| c | `—•—•` |
+| d | `—••` |
+| e | `•` |
+| f | `••—•` |
+| g | `——•` |
+| h | `••••` |
+| i | `••` |
+| j | `•———` |
+| k | `—•—` |
+| l | `•—••` |
+| m | `——` |
+| n | `—•` |
+| o | `———` |
+| p | `•——•` |
+| q | `——•—` |
+| r | `•—•` |
+| s | `•••` |
+| t | `—` |
+| u | `••—` |
+| v | `•••—` |
+| w | `•——` |
+| x | `—••—` |
+| y | `—•——` |
+| z | `——••` |
+| 1 | `•————` |
+| 2 | `••———` |
+| 3 | `•••——` |
+| 4 | `••••—` |
+| 5 | `•••••` |
+| 6 | `—••••` |
+| 7 | `——•••` |
+| 8 | `———••` |
+| 9 | `————•` |
+| 0 | `—————` |
+| . | `•—•—•—` |
+| , | `——••——` |
+| ? | `••——••` |
+| ! | `•—••——` |
+| : | `—•—•—•` |
+| ; | `•••—•` |
+| @ | `•———•` |
+| # | `—•———` |
+| $ | `—•••—•` |
+| % | `•——•—•` |
+| &amp; | `—••——` |
+| \* | `•—•••` |
+| + | `•——••` |
+| - | `———•` |
+| = | `•——•—` |
+| / | `——••—` |
+| \\ | `—•••••` |
+| ' | `•—•——•` |
+| " | `——•——` |
+| ( | `•••——•` |
+| ) | `—••——•` |
+| &lt; | `•—•••—` |
+| &gt; | `——••—•` |
+| ^ | `—•—••—` |
+| 回车 | `•—•—` |
+| 空格 | `••——` |
+| 退格 | `————` |
+| tab | `—•——•` |
+| 左向Tab | `——•—••` |
+| \_ | `••——•` |
+| 上一页 | `———••—` |
+| 下一页 | `———•—•` |
+| 左 | `————•—` |
+| 右 | `—————•` |
+| 上 | `————••` |
+| 下 | `——————` |
+| esc | `••—••` |
+| 行首 | `••••—•` |
+| 行尾 | `—•—••` |
+| 插入 | `•—••—` |
+| 删除 | `—••—•` |
+| 开始菜单 | `——••••` |
+| shift | `••—•—` |
+| alt | `•—•——` |
+| ctrl | `—•—•—` |
+| win | `••—•——` |
+| 应用菜单 | `—•••——` |
+| 大写锁定 | `••—•—•` |
+| 切换至鼠标页 | `——•—•` |
+| 切换至数字页 | `—•••—` |
+| 切换至字母页 | `•••—••` |
+| 修饰键锁定 | `•—••—•` |
+| 提示音 | `•—•—••` |
+| 切换码表 | `———•—` |
+| F1 | `••————` |
+| F2 | `•••———` |
+| F3 | `••••——` |
+| F4 | `•••••—` |
+| F5 | `••••••` |
+| F6 | `•—••••` |
+| F7 | `•——•••` |
+| F8 | `•———••` |
+| F9 | `•————•` |
+| F10 | `•—————` |
+| F11 | `—•————` |
+| F12 | `—••———` |
+
+## 字母
+
+本页共 51 项。以下编码仅在“字母”页生效。
+
+| 按键或操作 | 摩斯码 |
+| --- | --- |
+| 候选1 | `••••••` |
+| 候选2 | `•••••—` |
+| 候选3 | `••••—•` |
+| 候选4 | `••••——` |
+| 候选5 | `•••—••` |
+| 候选6 | `•••—•—` |
+| 候选7 | `•••———` |
+| 候选8 | `••—•••` |
+| a | `•—` |
+| b | `—•••` |
+| c | `—•—•` |
+| d | `—••` |
+| e | `•` |
+| f | `••—•` |
+| g | `——•` |
+| h | `••••` |
+| i | `••` |
+| j | `•———` |
+| k | `—•—` |
+| l | `•—••` |
+| m | `——` |
+| n | `—•` |
+| o | `———` |
+| p | `•——•` |
+| q | `——•—` |
+| r | `•—•` |
+| s | `•••` |
+| t | `—` |
+| u | `••—` |
+| v | `•••—` |
+| w | `•——` |
+| x | `—••—` |
+| y | `—•——` |
+| z | `——••` |
+| 1 | `•————` |
+| 2 | `••———` |
+| 3 | `•••——` |
+| 4 | `••••—` |
+| 5 | `•••••` |
+| 6 | `—••••` |
+| 7 | `——•••` |
+| 8 | `———••` |
+| 9 | `————•` |
+| 0 | `—————` |
+| . | `•—•—•—` |
+| , | `——••——` |
+| 回车 | `•—•—` |
+| 空格 | `••——` |
+| 退格 | `————` |
+| 切换至主键盘页 | `——•—•` |
+| 修饰键锁定 | `•—••—•` |
+
+## 鼠标
+
+本页共 33 项。以下编码仅在“鼠标”页生效。
+
+| 按键或操作 | 摩斯码 |
+| --- | --- |
+| 右移5 | `•` |
+| 右移40 | `—•` |
+| 右移250 | `•—•` |
+| 左移5 | `—` |
+| 左移40 | `——` |
+| 左移250 | `•——` |
+| 上移5 | `••` |
+| 上移40 | `•••` |
+| 上移250 | `—••` |
+| 下移5 | `•—` |
+| 下移40 | `••—` |
+| 下移250 | `—•—` |
+| 右上5 | `——•` |
+| 右上40 | `••—•` |
+| 右上250 | `•——•` |
+| 右下5 | `———` |
+| 右下40 | `••——` |
+| 右下250 | `•———` |
+| 左上5 | `••••` |
+| 左上40 | `•—••` |
+| 左上250 | `—•••` |
+| 左下5 | `•••—` |
+| 左下40 | `•—•—` |
+| 左下250 | `—••—` |
+| 左键单击 | `—•—•` |
+| 左键双击 | `—•——` |
+| 按住左键 | `——••` |
+| 松开鼠标 | `——•—` |
+| 右键单击 | `———•` |
+| 右键双击 | `————` |
+| 按住右键 | `•••••` |
+| 切换至主键盘页 | `——•—•` |
+| 修饰键锁定 | `•—••—•` |
+
+## 数字
+
+本页共 17 项。以下编码仅在“数字”页生效。
+
+| 按键或操作 | 摩斯码 |
+| --- | --- |
+| 1 | `•` |
+| 2 | `—` |
+| 3 | `•—` |
+| 4 | `••` |
+| 5 | `—•` |
+| 6 | `——` |
+| 7 | `•——` |
+| 8 | `••—` |
+| 9 | `•••` |
+| 0 | `—••` |
+| + | `——•` |
+| - | `———` |
+| / | `—•—` |
+| \* | `•—•` |
+| 回车 | `•—•—` |
+| . | `•—•—•—` |
+| 切换至主键盘页 | `——•—•` |
+
+## 维护与校验
+
+修改软件编码或动作名称后，运行 `python tools/generate_codechart.py` 更新本文件。运行 `python tools/generate_codechart.py --check` 可检查文档是否与软件一致。
