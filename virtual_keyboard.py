@@ -60,7 +60,7 @@ class KeyCap(QFrame):
     def updateView(self):
         colors = THEME_COLORS
         label = self.label_override if self.label_override is not None else self.item_label()
-        if self.config.get('upperchars', False):
+        if self.config.get('upperchars', False) and len(label) == 1 and label in 'abcdefghijklmnopqrstuvwxyz':
             label = label.upper()
         font = QFont(QApplication.font())
         font.setPointSizeF((8.7 if self.compact else 9.5) * self.scale)
@@ -84,7 +84,9 @@ class KeyCap(QFrame):
             '<span style="color:%s">%s</span><span style="color:%s">%s</span>'
             % (colors['success'], escape(self.code[:prefix_len]), code_color, escape(self.code[prefix_len:]))
         )
-        self.setToolTip(self.item_label() + '\n' + self.code)
+        tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
+                         else self.item_label())
+        self.setToolTip(tooltip_label + '\n' + self.code)
         # A seven-symbol code and translated key names must never be clipped.
         if self.compact == 'inline':
             minimum_width = self.codeline.sizeHint().width() + self.character.sizeHint().width() + 16
@@ -146,8 +148,12 @@ class VirtualKeyboardView(QWidget):
     changeLayoutSignal = pyqtSignal(str)
 
     DISPLAY_NAMES = {
-        'ESCAPE': '退出', 'TAB': '制表', 'TABLEFT': '反向制表',
+        'ESCAPE': 'Esc', 'TAB': 'Tab', 'TABLEFT': 'Shift+Tab',
+        'BACKSPACE': 'Backspace', 'CAPSLOCK': 'Caps Lock', 'ENTER': 'Enter',
         'SHIFT': 'Shift', 'CTRL': 'Ctrl', 'ALT': 'Alt', 'WINDOWS': 'Win',
+        'SPACE': 'Space', 'APPLICATION': 'Menu', 'STARTMENU': 'Start Menu',
+        'HOME': 'Home', 'END': 'End', 'INSERT': 'Insert', 'DELETE': 'Delete',
+        'PAGEUP': 'PgUp', 'PAGEDOWN': 'PgDn',
         'UPARROW': '↑', 'LEFTARROW': '←', 'RIGHTARROW': '→', 'DOWNARROW': '↓',
     }
 
@@ -171,6 +177,7 @@ class VirtualKeyboardView(QWidget):
                             Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setMinimumSize(360, 280)
         self._build()
         self.updateTheme()
         available = QApplication.desktop().availableGeometry()
@@ -237,28 +244,28 @@ class VirtualKeyboardView(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 8)
         outer.setSpacing(10)
-        header = QHBoxLayout()
-        heading = QVBoxLayout()
-        title = QLabel('键盘与鼠标')
+        self.header = QGridLayout()
+        self.header.setContentsMargins(0, 0, 0, 0)
+        self.header.setHorizontalSpacing(10)
+        self.header.setVerticalSpacing(4)
+        self.heading = QLabel('键盘与鼠标')
         title_font = QFont(QApplication.font())
         title_font.setPointSizeF(16)
         title_font.setBold(True)
-        title.setFont(title_font)
-        heading.addWidget(title)
-        subtitle = QLabel('照着键位输入摩斯码，匹配的按键会自动亮起。')
-        subtitle.setObjectName('guideHint')
-        heading.addWidget(subtitle)
-        header.addLayout(heading, 1)
+        self.heading.setFont(title_font)
+        self.subtitle = QLabel('照着键位输入摩斯码，匹配的按键会自动亮起。')
+        self.subtitle.setObjectName('guideHint')
+        self.subtitle.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.input_label = QLabel('等待输入')
         self.input_label.setAlignment(Qt.AlignCenter)
-        self.input_label.setMinimumWidth(150)
+        self.input_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.input_label.setObjectName('morseInput')
-        header.addWidget(self.input_label)
-        settings = QPushButton('返回设置')
-        settings.setToolTip('暂停输入并返回设置（Ctrl + Shift + P）')
-        settings.clicked.connect(self.settingsRequested.emit)
-        header.addWidget(settings)
-        outer.addLayout(header)
+        self.settings_button = QPushButton('返回设置')
+        self.settings_button.setToolTip('暂停输入并返回设置（Ctrl + Shift + P）')
+        self.settings_button.clicked.connect(self.settingsRequested.emit)
+        self._compact_header = None
+        self._set_compact_header(self.width() < 640)
+        outer.addLayout(self.header)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setFrameShape(QFrame.NoFrame)
@@ -283,7 +290,7 @@ class VirtualKeyboardView(QWidget):
                                      ['COMMA', 'DOT', 'FSLASH', ('TABLEFT', 20)]))
         keyboard.addLayout(self._row([
             ('CTRL', 15), ('WINDOWS', 15), ('ALT', 15), ('SPACE', 60),
-            ('APPLICATION', 23), ('STARTMENU', 23),
+            ('APPLICATION', 23),
         ]))
         keyboard.addSpacing(5)
         extras = QHBoxLayout()
@@ -336,6 +343,7 @@ class VirtualKeyboardView(QWidget):
         outer.addWidget(self.scroll_area, 1)
         self.status_bar = QStatusBar()
         self.status_bar.setSizeGripEnabled(False)
+        self.status_bar.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         outer.addWidget(self.status_bar)
         self.setOutputState((), False)
 
@@ -390,7 +398,7 @@ class VirtualKeyboardView(QWidget):
         panel.addLayout(directions)
         tools = QHBoxLayout()
         tools.setSpacing(5)
-        for action in ('REPEATMODE', 'SOUND'):
+        for action in ('STARTMENU', 'REPEATMODE', 'SOUND'):
             cap = self._cap(action, compact=True)
             if cap:
                 tools.addWidget(cap)
@@ -410,6 +418,32 @@ class VirtualKeyboardView(QWidget):
     def setAvailableLayouts(self, layouts, active):
         # Kept for the host's shared view interface; desktop commands stay together.
         pass
+
+    def _set_compact_header(self, compact):
+        if compact == self._compact_header:
+            return
+        self._compact_header = compact
+        for widget in (self.heading, self.subtitle, self.input_label, self.settings_button):
+            self.header.removeWidget(widget)
+        for column in range(3):
+            self.header.setColumnStretch(column, 0)
+            self.header.setColumnMinimumWidth(column, 0)
+        self.header.addWidget(self.heading, 0, 0)
+        self.header.setColumnStretch(0, 1)
+        if compact:
+            self.subtitle.hide()
+            self.header.addWidget(self.settings_button, 0, 1)
+            self.header.addWidget(self.input_label, 1, 0, 1, 2)
+        else:
+            self.subtitle.show()
+            self.header.addWidget(self.subtitle, 1, 0)
+            self.header.addWidget(self.input_label, 0, 1, 2, 1)
+            self.header.setColumnMinimumWidth(1, 150)
+            self.header.addWidget(self.settings_button, 0, 2, 2, 1)
+
+    def resizeEvent(self, event):
+        self._set_compact_header(event.size().width() < 640)
+        super().resizeEvent(event)
 
     def setOutputState(self, held_modifiers, locked):
         self._held = tuple(held_modifiers)

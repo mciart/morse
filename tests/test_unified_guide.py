@@ -1,6 +1,7 @@
 """Verify the unified guide against the real dispatch path, without OS input."""
 
 import json
+from PyQt5.QtCore import QPoint, QRect
 from unittest import TestCase
 from unittest.mock import call, patch
 
@@ -34,6 +35,41 @@ class UnifiedGuideTests(TestCase):
         extras = [i for i in items if i['action'].startswith('MOUSE') or i['action'] == 'PREDICTION_SELECT']
         self.assertEqual(len(extras), 39)
         self.assertTrue(all(len(i['code']) == 7 for i in extras))
+
+    def test_keyboard_legends_match_us_keys_and_keep_standard_capitalization(self):
+        view = self.window.codeslayoutview
+        expected = {
+            'ESCAPE': 'Esc', 'TAB': 'Tab', 'BACKSPACE': 'Backspace', 'CAPSLOCK': 'Caps Lock',
+            'ENTER': 'Enter', 'SHIFT': 'Shift', 'CTRL': 'Ctrl', 'ALT': 'Alt', 'WINDOWS': 'Win',
+            'SPACE': 'Space', 'APPLICATION': 'Menu', 'HOME': 'Home', 'END': 'End',
+            'INSERT': 'Insert', 'DELETE': 'Delete', 'PAGEUP': 'PgUp', 'PAGEDOWN': 'PgDn',
+            'TABLEFT': 'Shift+Tab', 'STARTMENU': 'Start Menu',
+        }
+        caps = {cap.item['action']: cap for cap in view.crs.values()}
+        for uppercase in (True, False):
+            view.config['upperchars'] = uppercase
+            for action, label in expected.items():
+                caps[action].updateView()
+                self.assertEqual(caps[action].character.text(), label)
+            caps['A'].updateView()
+            self.assertEqual(caps['A'].character.text(), 'A' if uppercase else 'a')
+        self.assertEqual(caps['MOUSECLICKLEFT'].character.text(), '单击')
+
+    def test_small_window_keeps_return_button_visible_and_scrolls_only_the_guide(self):
+        view = self.window.codeslayoutview
+        view.resize(360, 280)
+        self.app.processEvents()
+        self.assertEqual((view.width(), view.height()), (360, 280))
+        button = view.settings_button
+        self.assertTrue(button.isVisible())
+        button_rectangle = QRect(button.mapTo(view, QPoint(0, 0)), button.size())
+        self.assertTrue(view.rect().contains(button_rectangle))
+        self.assertGreater(view.scroll_area.horizontalScrollBar().maximum(), 0)
+        self.assertGreater(view.scroll_area.verticalScrollBar().maximum(), 0)
+        view.scroll_area.verticalScrollBar().setValue(view.scroll_area.verticalScrollBar().maximum())
+        self.app.processEvents()
+        self.assertEqual(button.mapTo(view, QPoint(0, 0)), button_rectangle.topLeft())
+        self.assertTrue(button.isVisible())
 
     def test_keyboard_and_mouse_execute_without_switching_layout(self):
         listener = self.window.listenerThread

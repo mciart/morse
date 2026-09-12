@@ -917,13 +917,25 @@ class Window(QDialog):
         self.DeviceButton.clicked.connect(self.changeAudioDevice)
         self.withSound.clicked.connect(self.updateAudioProperties)
         mainLayout = QVBoxLayout()
-        mainLayout.addWidget(self.iconGroupBox)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.settings_scroll.setWidget(self.iconGroupBox)
+        mainLayout.addWidget(self.settings_scroll, 1)
+        self.settings_actions = QWidget()
+        buttons = QHBoxLayout(self.settings_actions)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        for button in (self.DeviceButton, self.SaveButton, self.GOButton):
+            buttons.addWidget(button)
+        mainLayout.addWidget(self.settings_actions)
         self.setLayout(mainLayout)
         self.setIcon()
         self.trayIcon.show()
         self.setWindowTitle("摩斯输入设置")
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
-        self.resize(400, 300)
+        self.setMinimumSize(320, 240)
+        available = QApplication.desktop().availableGeometry(self)
+        self.resize(min(460, available.width() - 32), min(720, available.height() - 64))
 
 
     def get_configured_keys(self):
@@ -1319,11 +1331,6 @@ class Window(QDialog):
         self.DeviceButton = QPushButton("音频设备")
         self.SaveButton = QPushButton("保存设置")
         self.GOButton = QPushButton("开始输入")
-        buttonsSec = QHBoxLayout()
-        buttonsSec.addWidget(self.DeviceButton)
-        buttonsSec.addWidget(self.SaveButton)
-        buttonsSec.addWidget(self.GOButton)
-        inputSettingsLayout.addLayout(buttonsSec)
 
         self.iconGroupBox.setLayout(inputSettingsLayout)
 

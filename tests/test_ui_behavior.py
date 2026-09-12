@@ -110,6 +110,26 @@ class WindowBehaviorTests(unittest.TestCase):
         self.start_input()
         self.assertEqual(self.window.config, collected)
 
+    def test_small_settings_window_keeps_actions_visible_while_scrolling(self):
+        self.window.resize(360, 300)
+        self.app.processEvents()
+        self.assertLessEqual(self.window.width(), 360)
+        self.assertLessEqual(self.window.height(), 300)
+        scroll = self.window.settings_scroll.verticalScrollBar()
+        self.assertGreater(scroll.maximum(), 0)
+        for position in (0, scroll.maximum()):
+            scroll.setValue(position)
+            self.app.processEvents()
+            for button in (self.window.DeviceButton, self.window.SaveButton, self.window.GOButton):
+                origin = button.mapTo(self.window, morse.QtCore.QPoint(0, 0))
+                self.assertTrue(button.isVisible())
+                self.assertTrue(self.window.rect().contains(morse.QtCore.QRect(origin, button.size())))
+                self.assertFalse(self.window.settings_scroll.isAncestorOf(button))
+        self.window.SaveButton.click()
+        with open(self.window.configManager.config_file, encoding='utf-8') as stream:
+            self.assertEqual(json.load(stream), self.window.collect_config())
+        self.start_input()
+
     def test_code_close_and_tray_restore_preserve_active_input(self):
         view, listener = self.start_input()
         timers = self.add_pending_input()
