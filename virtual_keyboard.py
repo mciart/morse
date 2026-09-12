@@ -1,8 +1,6 @@
 """A single, spatial Morse guide for keyboard and mouse actions."""
 
-from html import escape
-
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGraphicsScene, QGraphicsView, QGridLayout,
@@ -144,6 +142,40 @@ class InputFeedbackPanel(QFrame):
         self._updateResultColor()
 
 
+class KeyLabel(QLabel):
+    """Paint changing colors without reparsing a stylesheet or rich text."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._foreground = THEME_COLORS['text']
+        self._prefix_color = THEME_COLORS['success']
+        self._prefix_length = 0
+
+    def setColors(self, foreground, prefix_color=None, prefix_length=0):
+        state = (foreground, prefix_color or foreground, prefix_length)
+        if state != (self._foreground, self._prefix_color, self._prefix_length):
+            self._foreground, self._prefix_color, self._prefix_length = state
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setFont(self.font())
+        painter.setPen(QColor(self._foreground))
+        bounds = self.contentsRect().adjusted(self.margin(), self.margin(), -self.margin(), -self.margin())
+        text = self.text()
+        if self._prefix_length:
+            metrics = self.fontMetrics()
+            x = bounds.x() + (bounds.width() - metrics.horizontalAdvance(text)) / 2
+            y = bounds.y() + (bounds.height() - metrics.height()) / 2 + metrics.ascent()
+            prefix = text[:self._prefix_length]
+            painter.setPen(QColor(self._prefix_color))
+            painter.drawText(QPointF(x, y), prefix)
+            painter.setPen(QColor(self._foreground))
+            painter.drawText(QPointF(x + metrics.horizontalAdvance(prefix), y), text[self._prefix_length:])
+        else:
+            painter.drawText(bounds, self.alignment() | Qt.TextSingleLine, text)
+
+
 class KeyCap(QFrame):
     """Read-only key with live prefix highlighting and action-owned labels."""
 
@@ -161,19 +193,22 @@ class KeyCap(QFrame):
         self.disabledchars = 0
         self.is_enabled = True
         self.toggled = False
+        self._content_label = None
+        self._appearance = None
         self.compact = compact
         self.scale = max(0.7, min(float(config.get('fontsizescale', 100)) / 100, 3))
         self.setObjectName('morseKey')
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setFocusPolicy(Qt.NoFocus)
-        self.character = QLabel()
+        self.character = KeyLabel()
         self.character.setTextFormat(Qt.PlainText)
         self.character.setAlignment(Qt.AlignCenter)
         if self.is_prediction:
             self.character.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.codeline = QLabel()
+        self.codeline = KeyLabel()
         self.codeline.setAlignment(Qt.AlignCenter)
-        self.codeline.setTextFormat(Qt.RichText)
+        self.codeline.setTextFormat(Qt.PlainText)
+        self.codeline.setText(self.code)
         self.codeline.setWordWrap(False)
         if compact == 'inline':
             self.character.setMargin(2)
@@ -185,6 +220,13 @@ class KeyCap(QFrame):
         content.addWidget(self.codeline)
         self.setMinimumWidth(round((58 if compact else 51) * self.scale))
         self.setFixedHeight(round((26 if compact == 'inline' else 43 if compact else 51) * self.scale))
+        font = QFont(QApplication.font())
+        font.setPointSizeF((8.7 if self.compact else 9.5) * self.scale)
+        font.setBold(True)
+        self.character.setFont(font)
+        code_font = QFont('Consolas')
+        code_font.setPointSizeF((9.1 if self.compact else 10.0) * self.scale)
+        self.codeline.setFont(code_font)
         self.updateView()
 
     def item_label(self):
@@ -193,7 +235,6 @@ class KeyCap(QFrame):
         return str(label) if label is not None else ''
 
     def updateView(self):
-        colors = THEME_COLORS
         label = self.label_override if self.label_override is not None else self.item_label()
         self.is_available = bool(label) if self.is_prediction else True
         self.is_enabled = self._prefix_matches and self.is_available
@@ -202,32 +243,15 @@ class KeyCap(QFrame):
         elif (self.config.get('upperchars', False) and self.item.get('action') in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
               and len(self.item.get('action', '')) == 1 and len(label) == 1 and label in 'abcdefghijklmnopqrstuvwxyz'):
             label = label.upper()
-        font = QFont(QApplication.font())
-        font.setPointSizeF((8.7 if self.compact else 9.5) * self.scale)
-        font.setBold(True)
-        self.character.setFont(font)
+        self._refreshAppearance()
+        if label == self._content_label:
+            return
+        self._content_label = label
         if self.is_prediction:
             self._candidate_text = label
             self._elide_candidate_label()
         else:
             self.character.setText(label)
-        code_font = QFont('Consolas')
-        code_font.setPointSizeF((9.1 if self.compact else 10.0) * self.scale)
-        self.codeline.setFont(code_font)
-        prefix_len = self.disabledchars if self.is_enabled else 0
-        foreground = colors['highlight_text'] if self.toggled else colors['text'] if self.is_enabled else colors['disabled']
-        code_color = colors['highlight_text'] if self.toggled else colors['accent'] if self.is_enabled else colors['disabled']
-        background = colors['highlight'] if self.toggled else colors['surface'] if self.is_enabled else colors['background']
-        border = colors['accent'] if self.toggled else colors['border'] if self.is_enabled else colors['surface']
-        self.setStyleSheet(
-            'QFrame#morseKey { background: %s; border: 1px solid %s; border-radius: 6px; }'
-            'QFrame#morseKey QLabel { background: transparent; border: none; color: %s; }'
-            % (background, border, foreground)
-        )
-        self.codeline.setText(
-            '<span style="color:%s">%s</span><span style="color:%s">%s</span>'
-            % (colors['success'], escape(self.code[:prefix_len]), code_color, escape(self.code[prefix_len:]))
-        )
         if self.is_prediction:
             tooltip_label = '候选 ' + str(self.item.get('target', 0) + 1) + '：'
             tooltip_label += self.item_label() if self.is_available else '暂无可用词语\n该位置当前不能选择。'
@@ -256,6 +280,28 @@ class KeyCap(QFrame):
         self.setFixedHeight(max(round((26 if self.compact == 'inline' else 43 if self.compact else 51) * self.scale),
                                 content_height))
 
+    def _refreshAppearance(self):
+        colors = THEME_COLORS
+        self.is_enabled = self._prefix_matches and self.is_available
+        prefix_len = self.disabledchars if self.is_enabled else 0
+        foreground = colors['highlight_text'] if self.toggled else colors['text'] if self.is_enabled else colors['disabled']
+        code_color = colors['highlight_text'] if self.toggled else colors['accent'] if self.is_enabled else colors['disabled']
+        background = colors['highlight'] if self.toggled else colors['surface'] if self.is_enabled else colors['background']
+        border = colors['accent'] if self.toggled else colors['border'] if self.is_enabled else colors['surface']
+        self.character.setColors(foreground)
+        self.codeline.setColors(code_color, colors['success'], prefix_len)
+        if self._appearance != (background, border):
+            self._appearance = (background, border)
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        background, border = self._appearance
+        painter.setBrush(QColor(background))
+        painter.setPen(QPen(QColor(border), 1))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 6, 6)
+
     def _elide_candidate_label(self):
         self.character.setText(self.character.fontMetrics().elidedText(
             self._candidate_text, Qt.ElideRight, max(1, self.width() - 12)))
@@ -282,13 +328,14 @@ class KeyCap(QFrame):
         self.updateView()
 
     def _advance(self, symbol):
-        if self._prefix_matches:
-            position = self.disabledchars
-            if position < len(self.raw_code) and self.raw_code[position] == symbol:
-                self.disabledchars += 1
-            else:
-                self._prefix_matches = False
-        self.updateView()
+        if not self._prefix_matches:
+            return
+        position = self.disabledchars
+        if position < len(self.raw_code) and self.raw_code[position] == symbol:
+            self.disabledchars += 1
+        else:
+            self._prefix_matches = False
+        self._refreshAppearance()
 
     def Dit(self):
         self._advance('1')
@@ -782,7 +829,10 @@ class VirtualKeyboardView(QWidget):
 
     def closeEvent(self, event):
         event.ignore()
-        self.showMinimized()
+        # The application's tray remains available; closing this guide does
+        # not alter the running input session. Minimize retains Qt's standard
+        # taskbar behavior for this independent Qt.Window.
+        self.hide()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_P and event.modifiers() & Qt.ControlModifier and event.modifiers() & Qt.ShiftModifier:

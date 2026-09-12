@@ -43,6 +43,7 @@ class MorseEngine:
         self._phase = None
         self._last_symbol = None
         self._last_mark_started_at = None
+        self._last_mark_ended_at = None
         self._queue = deque()
         self._memory = set()
         self._gap_started = None
@@ -83,9 +84,16 @@ class MorseEngine:
         self._last_mark_started_at = self._now
         self._phase = 'mark'
         self._deadline = self._now + self.unit * (1 if symbol == 1 else 3)
+        if self.mode == 'iambic':
+            # Squeeze memory includes the opposite paddle already held when
+            # this element begins, even if it is released before the next tick.
+            self._memory.update(role + 1 for role in self.held
+                                if role < 2 and role + 1 != symbol)
+        # Open the sidetone before the caller updates the potentially expensive
+        # guide. Its visual callbacks must not delay the first audible frame.
+        self._set_tone(True)
         if append:
             self._append(symbol)
-        self._set_tone(True)
 
     def _next_iambic(self):
         available = {role + 1 for role in self.held if role < 2} | self._memory
@@ -137,6 +145,7 @@ class MorseEngine:
                 break
             if self._phase == 'mark':
                 self._set_tone(False)
+                self._last_mark_ended_at = self._now
                 self._phase = 'space'
                 self._deadline = self._now + self.unit
                 self._schedule_commit(self._now)
@@ -210,15 +219,20 @@ class MorseEngine:
                 self._set_tone(True)
             elif self.mode == 'manual':
                 symbol = role + 1
-                self._append(symbol)
                 if self._phase is None:
-                    self._begin_mark(symbol, False)
+                    self._begin_mark(symbol, True)
                 else:
+                    self._append(symbol)
                     self._queue.append(symbol)
             else:
-                self._memory.add(role + 1)
                 if self._phase is None:
+                    self._memory.add(role + 1)
                     self._begin_mark(self._next_iambic(), True)
+                elif role + 1 != self._last_symbol:
+                    # Only the opposite paddle has element memory. Re-tapping
+                    # the currently sounding paddle is not an extra element
+                    # unless it remains held at the next element boundary.
+                    self._memory.add(role + 1)
         else:
             self.held.discard(role)
             if self.mode == 'straight' and role == 0:
@@ -229,7 +243,14 @@ class MorseEngine:
             if not self.held:
                 # In automatic mode the last mark can outlive a quick tap.
                 if self._phase != 'mark' and not self._queue:
-                    self._schedule_commit(target)
+                    # An automatic mark's silence begins at tone-off, even if
+                    # the paddle is released partway through its inner space.
+                    # Measuring from release would add up to an extra dit to
+                    # the standard three-dit character gap.
+                    gap_start = (self._last_mark_ended_at
+                                 if self.mode == 'iambic' and self._last_mark_ended_at is not None
+                                 else target)
+                    self._schedule_commit(gap_start)
         self._feedback()
         return self._finish()
 

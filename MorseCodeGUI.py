@@ -885,10 +885,10 @@ class Window(QDialog):
         self.setIcon()
         self.trayIcon.show()
         self.setWindowTitle("摩斯输入设置")
-        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.setMinimumSize(320, 240)
         available = QApplication.desktop().availableGeometry(self)
-        self.resize(min(460, available.width() - 32), min(720, available.height() - 64))
+        self.resize(min(460, available.width() - 32), min(680, available.height() - 64))
 
 
     def get_configured_keys(self):
@@ -995,7 +995,10 @@ class Window(QDialog):
     def showCodeView(self):
         view_class = VirtualKeyboardView if self.layoutManager.active_layout_name == 'desktop' else CodesLayoutViewWidget
         view = view_class(self.layoutManager.get_active_layout(), self.config)
-        view.setParent(self, view.windowFlags())
+        # Keep a strong Python reference, but no native owner: an owned window
+        # disappears from the Windows taskbar when the settings window hides.
+        # stopIt()/changeLayout() explicitly hide and delete each guide.
+        view.setWindowIcon(self.windowIcon())
         self.codeslayoutview = view
         view.setAvailableLayouts(self.layoutManager.layouts, self.layoutManager.active_layout_name)
         view.changeLayoutSignal.connect(self.changeLayout)
@@ -1077,30 +1080,23 @@ class Window(QDialog):
         config = {
             **self.config,
             'theme': self.themeComboBox.currentData(),
-            'guide_layout': self.guideLayoutComboBox.currentData(),
             'show_mouse': self.showMouseCheckBox.isChecked(),
             'guide_auto_fit': self.guideAutoFitCheckBox.isChecked(),
             'keylen': self.keySelectionRadioOneKey.isChecked() and 1 or self.keySelectionRadioTwoKey.isChecked() and 2 or 3,
             'keyone': self.iconComboBoxKeyOne.itemData(self.iconComboBoxKeyOne.currentIndex()),
             'keytwo': self.iconComboBoxKeyTwo.itemData(self.iconComboBoxKeyTwo.currentIndex()),
             'keythree': self.iconComboBoxKeyThree.itemData(self.iconComboBoxKeyThree.currentIndex()),
-            'maxDitTime': self.maxDitTimeEdit.value(),
-            'minLetterPause': self.minLetterPauseEdit.value(),
+            'maxDitTime': self.maxDitTimeEdit.value() if self.customTimingCheck.isChecked() else 0,
+            'minLetterPause': self.minLetterPauseEdit.value() if self.customTimingCheck.isChecked() else 0,
             'keyer_mode': 'iambic' if self.fastMorseModeCheckbox.isChecked() else 'manual',
             'wpm': self.wpmEdit.value(),
             'tone_frequency': self.toneFrequencyEdit.value(),
             'tone_volume': self.toneVolumeEdit.value(),
             'confirmation_sound': self.confirmationSoundCheck.isChecked(),
             'withsound': self.withSound.isChecked(),
-            'debug': self.withDebug.isChecked(),
             'off': False,
-            'fontsizescale': float(self.fontSizeScaleEdit.text()),
-            'upperchars': self.upperCharsCheck.isChecked(),
+            'fontsizescale': self.fontSizeScaleEdit.value(),
             'autostart': self.autostartCheckbox.isChecked(),
-            'winxaxis': "left" if self.keyWinPosXLeftRadio.isChecked() else "right",
-            'winyaxis': "top" if self.keyWinPosYTopRadio.isChecked() else "bottom",
-            'winposx': self.keyWinPosXEdit.text(),
-            'winposy': self.keyWinPosYEdit.text(),
             'fastMorseMode': self.fastMorseModeCheckbox.isChecked() if self.keySelectionRadioOneKey.isChecked() is False else False,
         }
         return config
@@ -1119,9 +1115,10 @@ class Window(QDialog):
         try:
             self.config = self.collect_config()
         except (ValueError, TypeError):
-            QMessageBox.warning(self, '设置无效', '请检查字号和位置等数值设置。')
+            QMessageBox.warning(self, '设置无效', '请检查输入及声音设置。')
             return
         self.hide()
+        self.config['guide_layout'] = 'desktop'
         self.onOffAction.setText("暂停输入")
         self.init()
         if not self.listenerThread:
@@ -1133,7 +1130,7 @@ class Window(QDialog):
 
     def closeEvent(self, event):
         event.ignore()
-        self.showMinimized()
+        self.hide()
 
     def quitApplication(self):
         self.shutdown()
@@ -1255,82 +1252,62 @@ class Window(QDialog):
         for index, name in [[1,'One'], [2,'Two'], [3,'Three']]:
             getattr(self, 'keySelectionRadio%sKey'%(name)).setChecked(self.config.get('keylen', 1) == index)
 
-        maxDitTimeLabel = QLabel("单键点划分界：")
+        self.fastMorseModeCheckbox = QCheckBox('自动电键：长按连发、双键交替')
+        self.fastMorseModeCheckbox.setChecked(self.config.get('keyer_mode', 'manual') == 'iambic')
+        inputSettingsLayout.addWidget(self.fastMorseModeCheckbox)
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel('点划速度：'))
+        self.wpmEdit = QSpinBox()
+        self.wpmEdit.setRange(5, 60)
+        self.wpmEdit.setValue(int(self.config.get('wpm', 15)))
+        self.wpmEdit.setSuffix(' WPM')
+        speed_layout.addWidget(self.wpmEdit, 1)
+        self.standardKeyerButton = QPushButton('标准电键预设')
+        self.standardKeyerButton.setToolTip('双键自动电键，15 WPM、600 Hz、音量 30%，使用标准点划及确认间隔。输入键保持原选择。')
+        self.standardKeyerButton.clicked.connect(self.applyStandardKeyerPreset)
+        speed_layout.addWidget(self.standardKeyerButton)
+        inputSettingsLayout.addLayout(speed_layout)
+        self.timingSummary = QLabel()
+        self.timingSummary.setWordWrap(True)
+        inputSettingsLayout.addWidget(self.timingSummary)
+        self.wpmEdit.valueChanged.connect(self.updateTimingSummary)
+        self.customTimingCheck = QCheckBox('高级：自定义识别时长')
+        self.customTimingCheck.setToolTip('通常关闭即可随速度使用标准节奏；勾选后可延长单键分界或字符确认时间。')
+        self.customTimingCheck.setChecked(any(float(self.config.get(name, 0)) > 0
+                                             for name in ('maxDitTime', 'minLetterPause')))
+        inputSettingsLayout.addWidget(self.customTimingCheck)
+        self.customTimingPanel = QWidget()
+        timing_layout = QGridLayout(self.customTimingPanel)
+        timing_layout.setContentsMargins(0, 0, 0, 0)
+        self.maxDitTimeLabel = QLabel('单键点划分界：')
         self.maxDitTimeEdit = QSpinBox()
         self.maxDitTimeEdit.setRange(0, 5000)
         self.maxDitTimeEdit.setSpecialValueText('自动（2 个点时长）')
         self.maxDitTimeEdit.setSuffix(' 毫秒')
         self.maxDitTimeEdit.setValue(round(float(self.config.get('maxDitTime', 0))))
-        minLetterPauseLabel = QLabel("字符确认间隔：")
+        self.minLetterPauseLabel = QLabel('字符确认间隔：')
         self.minLetterPauseEdit = QSpinBox()
         self.minLetterPauseEdit.setRange(0, 60000)
         self.minLetterPauseEdit.setSpecialValueText('标准（3 个点时长）')
         self.minLetterPauseEdit.setSuffix(' 毫秒')
         self.minLetterPauseEdit.setValue(round(float(self.config.get('minLetterPause', 0))))
+        self.minLetterPauseEdit.valueChanged.connect(self.updateTimingSummary)
         self.minLetterPauseEdit.setToolTip('设为 0 使用标准间隔；较大的数值增加输入容错。三键模式由第三键确认。')
-        self.wpmEdit = QSpinBox()
-        self.wpmEdit.setRange(5, 60)
-        self.wpmEdit.setValue(int(self.config.get('wpm', 15)))
-        self.wpmEdit.setSuffix(' WPM')
-        TimingsLayout = QGridLayout()
-        TimingsLayout.addWidget(QLabel('点划速度：'), 0, 0)
-        TimingsLayout.addWidget(self.wpmEdit, 0, 1)
-        TimingsLayout.addWidget(maxDitTimeLabel, 1, 0)
-        TimingsLayout.addWidget(self.maxDitTimeEdit, 1, 1)
-        TimingsLayout.addWidget(minLetterPauseLabel, 2, 0)
-        TimingsLayout.addWidget(self.minLetterPauseEdit, 2, 1)
-        inputSettingsLayout.addLayout(TimingsLayout)
+        timing_layout.addWidget(self.maxDitTimeLabel, 0, 0)
+        timing_layout.addWidget(self.maxDitTimeEdit, 0, 1)
+        timing_layout.addWidget(self.minLetterPauseLabel, 1, 0)
+        timing_layout.addWidget(self.minLetterPauseEdit, 1, 1)
+        inputSettingsLayout.addWidget(self.customTimingPanel)
+        self.customTimingCheck.toggled.connect(self.updateFastMorseModeAvailability)
 
-        self.withDebug = QCheckBox("启用调试")
-        self.withDebug.setChecked(self.config.get("debug", False))
-        inputSettingsLayout.addWidget(self.withDebug)
-
-        self.withSound = QCheckBox("播放摩斯音")
-        self.withSound.setChecked(self.config.get("withsound", True))
-        inputSettingsLayout.addWidget(self.withSound)
-
-        fontSizeScaleLabel = QLabel("字号缩放（%）：")
-        self.fontSizeScaleEdit = QLineEdit(str(self.config.get("fontsizescale", "100")))
-        viewSettingSec = QGridLayout()
-        viewSettingSec.addWidget(fontSizeScaleLabel, 0, 0)
-        viewSettingSec.addWidget(self.fontSizeScaleEdit, 0, 1, 1, 2)
-        self.upperCharsCheck = QCheckBox("字母大写显示")
-        self.upperCharsCheck.setChecked(self.config.get("upperchars", True))
-        viewSettingSec.addWidget(self.upperCharsCheck, 0, 3)
-        viewSettingSec.setRowStretch(4, 1)
-        inputSettingsLayout.addLayout(viewSettingSec)
-
-        appearance = QGridLayout()
-        appearance.addWidget(QLabel('界面主题：'), 0, 0)
-        self.themeComboBox = QComboBox()
-        for label, mode in (('跟随系统', 'system'), ('浅色', 'light'), ('深色', 'dark')):
-            self.themeComboBox.addItem(label, mode)
-        self.themeComboBox.setCurrentIndex(max(0, self.themeComboBox.findData(self.config.get('theme', 'system'))))
-        self.themeComboBox.currentIndexChanged.connect(self.changeTheme)
-        appearance.addWidget(self.themeComboBox, 0, 1)
-        appearance.addWidget(QLabel('输入面板：'), 1, 0)
-        self.guideLayoutComboBox = QComboBox()
-        names = {'desktop': '键盘与鼠标（统一面板）', 'main': '兼容 · 主键盘',
-                 'typing': '兼容 · 字母与候选', 'mouse': '兼容 · 鼠标短码', 'number': '兼容 · 数字短码'}
-        for name in ('desktop', 'main', 'typing', 'mouse', 'number'):
-            if name in self.layoutManager.layouts:
-                self.guideLayoutComboBox.addItem(names[name], name)
-        self.guideLayoutComboBox.setCurrentIndex(max(0, self.guideLayoutComboBox.findData(self.config.get('guide_layout', 'desktop'))))
-        self.guideLayoutComboBox.setToolTip('统一面板中可直接输入键盘与鼠标编码；兼容选项保留旧版短码。')
-        appearance.addWidget(self.guideLayoutComboBox, 1, 1)
-        inputSettingsLayout.addLayout(appearance)
-        guide_options = QHBoxLayout()
-        self.guideAutoFitCheckBox = QCheckBox('码表自动适应窗口')
-        self.guideAutoFitCheckBox.setChecked(self.config.get('guide_auto_fit', True))
-        self.guideAutoFitCheckBox.clicked.connect(self.changeGuideAutoFit)
-        guide_options.addWidget(self.guideAutoFitCheckBox)
-        self.showMouseCheckBox = QCheckBox('显示鼠标对照')
-        self.showMouseCheckBox.setChecked(self.config.get('show_mouse', False))
-        self.showMouseCheckBox.clicked.connect(self.changeMouseVisibility)
-        guide_options.addWidget(self.showMouseCheckBox)
-        inputSettingsLayout.addLayout(guide_options)
-        self.fontSizeScaleEdit.setToolTip('关闭“码表自动适应窗口”后，可按此比例查看键位。')
-
+        sound_group = QGroupBox('声音')
+        sound_layout = QGridLayout(sound_group)
+        self.withSound = QCheckBox('播放摩斯音')
+        self.withSound.setChecked(self.config.get('withsound', True))
+        sound_layout.addWidget(self.withSound, 0, 0)
+        self.previewToneButton = QPushButton('试听')
+        self.previewToneButton.clicked.connect(self.previewMorseTone)
+        sound_layout.addWidget(self.previewToneButton, 0, 1)
         self.toneFrequencyEdit = QSpinBox()
         self.toneFrequencyEdit.setRange(200, 1200)
         self.toneFrequencyEdit.setSuffix(' Hz')
@@ -1341,58 +1318,49 @@ class Window(QDialog):
         self.toneVolumeEdit.setValue(int(self.config.get('tone_volume', 30)))
         self.confirmationSoundCheck = QCheckBox('字符完成与无效码提示音')
         self.confirmationSoundCheck.setChecked(self.config.get('confirmation_sound', False))
-        SoundConfigLayout = QGridLayout()
-        SoundConfigLayout.addWidget(QLabel('摩斯音高：'), 0, 0)
-        SoundConfigLayout.addWidget(self.toneFrequencyEdit, 0, 1)
-        SoundConfigLayout.addWidget(QLabel('音量：'), 1, 0)
-        SoundConfigLayout.addWidget(self.toneVolumeEdit, 1, 1)
-        SoundConfigLayout.addWidget(self.confirmationSoundCheck, 2, 0, 1, 2)
+        sound_layout.addWidget(QLabel('音高：'), 1, 0)
+        sound_layout.addWidget(self.toneFrequencyEdit, 1, 1)
+        sound_layout.addWidget(QLabel('音量：'), 2, 0)
+        sound_layout.addWidget(self.toneVolumeEdit, 2, 1)
+        sound_layout.addWidget(self.confirmationSoundCheck, 3, 0, 1, 2)
+        inputSettingsLayout.addWidget(sound_group)
         for control in (self.toneFrequencyEdit, self.toneVolumeEdit):
             control.valueChanged.connect(self.previewAudioSettings)
         self.confirmationSoundCheck.toggled.connect(self.previewAudioSettings)
 
-        self.autostartCheckbox = QCheckBox("启动后自动开始输入")
-        self.autostartCheckbox.setChecked(self.config.get("autostart", True))
+        appearance_group = QGroupBox('外观')
+        appearance = QGridLayout(appearance_group)
+        appearance.addWidget(QLabel('界面主题：'), 0, 0)
+        self.themeComboBox = QComboBox()
+        for label, mode in (('跟随系统', 'system'), ('浅色', 'light'), ('深色', 'dark')):
+            self.themeComboBox.addItem(label, mode)
+        self.themeComboBox.setCurrentIndex(max(0, self.themeComboBox.findData(self.config.get('theme', 'system'))))
+        self.themeComboBox.currentIndexChanged.connect(self.changeTheme)
+        appearance.addWidget(self.themeComboBox, 0, 1)
+        self.guideAutoFitCheckBox = QCheckBox('码表自动适应窗口')
+        self.guideAutoFitCheckBox.setChecked(self.config.get('guide_auto_fit', True))
+        self.guideAutoFitCheckBox.clicked.connect(self.changeGuideAutoFit)
+        appearance.addWidget(self.guideAutoFitCheckBox, 1, 0)
+        self.showMouseCheckBox = QCheckBox('显示鼠标对照')
+        self.showMouseCheckBox.setChecked(self.config.get('show_mouse', False))
+        self.showMouseCheckBox.clicked.connect(self.changeMouseVisibility)
+        appearance.addWidget(self.showMouseCheckBox, 1, 1)
+        self.fontSizeScaleLabel = QLabel('码表缩放：')
+        self.fontSizeScaleEdit = QSpinBox()
+        self.fontSizeScaleEdit.setRange(10, max(300, round(float(self.config.get('fontsizescale', 100)))))
+        self.fontSizeScaleEdit.setSuffix(' %')
+        self.fontSizeScaleEdit.setValue(round(float(self.config.get('fontsizescale', 100))))
+        appearance.addWidget(self.fontSizeScaleLabel, 2, 0)
+        appearance.addWidget(self.fontSizeScaleEdit, 2, 1)
+        self.guideAutoFitCheckBox.toggled.connect(self.updateGuideScaleAvailability)
+        self.updateGuideScaleAvailability()
+        inputSettingsLayout.addWidget(appearance_group)
+
+        self.autostartCheckbox = QCheckBox('启动后自动开始输入')
+        self.autostartCheckbox.setChecked(self.config.get('autostart', False))
         inputSettingsLayout.addWidget(self.autostartCheckbox)
-
-        # Add Fast Morse Mode checkbox
-        self.fastMorseModeCheckbox = QCheckBox("自动电键（长按连发、双键交替）")
-        self.fastMorseModeCheckbox.setChecked(self.config.get("keyer_mode", "manual") == "iambic")
-        inputSettingsLayout.addWidget(self.fastMorseModeCheckbox)
-
-        self.updateFastMorseModeAvailability()  # Initialize the state based on the current key mode
-
-        inputSettingsLayout.addLayout(SoundConfigLayout)
-
-        inputRadioGroup = QGroupBox("码表水平位置（像素）")
-        posAxisLayout = QHBoxLayout()
-        self.keyWinPosXLeftRadio = QRadioButton("距左侧")
-        self.keyWinPosXRightRadio = QRadioButton("距右侧")
-        if self.config.get("winxaxis", "left") == "left":
-            self.keyWinPosXLeftRadio.setChecked(True)
-        else:
-            self.keyWinPosXRightRadio.setChecked(True)
-        posAxisLayout.addWidget(self.keyWinPosXLeftRadio)
-        posAxisLayout.addWidget(self.keyWinPosXRightRadio)
-        self.keyWinPosXEdit = QLineEdit(str(self.config.get("winposx", "10")))
-        inputRadioGroup.setLayout(posAxisLayout)
-        inputSettingsLayout.addWidget(inputRadioGroup)
-        inputSettingsLayout.addWidget(self.keyWinPosXEdit)
-
-        inputRadioGroup = QGroupBox("码表垂直位置（像素）")
-        posAxisLayout = QHBoxLayout()
-        self.keyWinPosYTopRadio = QRadioButton("距顶部")
-        self.keyWinPosYBottomRadio = QRadioButton("距底部")
-        if self.config.get("winyaxis", "top") == "top":
-            self.keyWinPosYTopRadio.setChecked(True)
-        else:
-            self.keyWinPosYBottomRadio.setChecked(True)
-        posAxisLayout.addWidget(self.keyWinPosYTopRadio)
-        posAxisLayout.addWidget(self.keyWinPosYBottomRadio)
-        self.keyWinPosYEdit = QLineEdit(str(self.config.get("winposy", "10")))
-        inputRadioGroup.setLayout(posAxisLayout)
-        inputSettingsLayout.addWidget(inputRadioGroup)
-        inputSettingsLayout.addWidget(self.keyWinPosYEdit)
+        self.updateFastMorseModeAvailability()
+        self.updateTimingSummary()
 
         self.DeviceButton = QPushButton("音频设备")
         self.SaveButton = QPushButton("保存设置")
@@ -1401,20 +1369,52 @@ class Window(QDialog):
         self.iconGroupBox.setLayout(inputSettingsLayout)
 
     def updateFastMorseModeAvailability(self):
-        """
-        Enable or disable Fast Morse Mode based on the selected key mode.
-        """
-        if self.keySelectionRadioOneKey.isChecked():
-            self.fastMorseModeCheckbox.setEnabled(False)
+        single = self.keySelectionRadioOneKey.isChecked()
+        three = self.keySelectionRadioThreeKey.isChecked()
+        self.fastMorseModeCheckbox.setEnabled(not single)
+        if single:
             self.fastMorseModeCheckbox.setChecked(False)
-        else:
-            self.fastMorseModeCheckbox.setEnabled(True)
+        self.customTimingCheck.setVisible(not three)
+        self.customTimingPanel.setVisible(self.customTimingCheck.isChecked() and not three)
+        for control in (self.maxDitTimeLabel, self.maxDitTimeEdit):
+            control.setVisible(single)
+        self.updateTimingSummary()
+
+    def updateTimingSummary(self):
+        unit = 1200 / self.wpmEdit.value()
+        custom = self.customTimingCheck.isChecked()
+        gap = max(3 * unit, self.minLetterPauseEdit.value()) if custom else 3 * unit
+        ending = '第三键确认' if self.keySelectionRadioThreeKey.isChecked() else f'确认 {gap:g} 毫秒'
+        self.timingSummary.setText(f'点 {unit:g} 毫秒 · 划 {3 * unit:g} 毫秒 · {ending}')
+
+    def updateGuideScaleAvailability(self):
+        manual = not self.guideAutoFitCheckBox.isChecked()
+        self.fontSizeScaleLabel.setVisible(manual)
+        self.fontSizeScaleEdit.setVisible(manual)
+
+    def applyStandardKeyerPreset(self):
+        self.keySelectionRadioTwoKey.setChecked(True)
+        self.fastMorseModeCheckbox.setChecked(True)
+        self.wpmEdit.setValue(15)
+        self.customTimingCheck.setChecked(False)
+        self.maxDitTimeEdit.setValue(0)
+        self.minLetterPauseEdit.setValue(0)
+        self.toneFrequencyEdit.setValue(600)
+        self.toneVolumeEdit.setValue(30)
+        self.confirmationSoundCheck.setChecked(False)
+        self.withSound.setChecked(True)
+        self.updateAudioProperties()
+        self.updateFastMorseModeAvailability()
+
+    def previewMorseTone(self):
+        self.previewAudioSettings()
+        self.audio.preview()
 
     def saveSettings (self):
         try:
             self.config = self.collect_config()
         except (ValueError, TypeError):
-            QMessageBox.warning(self, '设置无效', '请检查字号和位置等数值设置。')
+            QMessageBox.warning(self, '设置无效', '请检查输入及声音设置。')
             return
         self.configManager.save_config(self.config)
 
@@ -1527,7 +1527,7 @@ class Window(QDialog):
     def processEngineEvents(self, events):
         for kind, payload in events:
             if kind == 'tone':
-                self.audio.set_tone(payload['on'])
+                self.audio.set_tone(payload['on'], timestamp=payload.get('at'))
             elif kind == 'symbol':
                 self.addDit() if payload['symbol'] == 1 else self.addDah()
             elif kind == 'commit':
@@ -1862,7 +1862,7 @@ class CodesLayoutViewWidget(QWidget):
 
     def closeEvent(self, event):
         event.ignore()
-        self.showMinimized()
+        self.hide()
 
     def keyPressEvent(self, event):
         if self.escapeMorseModeListener.keyPressEvent(event):

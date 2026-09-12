@@ -111,6 +111,46 @@ class MorseEngineTests(unittest.TestCase):
         self.assertEqual(values(events, 'symbol', 'symbol'), [2, 1])
         self.assertEqual(values(events, 'commit', 'symbols'), [(2, 1)])
 
+    def test_first_mark_opens_audio_before_visual_symbol_in_both_modes(self):
+        for mode in ('manual', 'iambic'):
+            for role in (0, 1):
+                with self.subTest(mode=mode, role=role):
+                    engine = self.engine(keyer_mode=mode)
+                    events = engine.key(role, True, 0)
+                    self.assertEqual([kind for kind, _ in events[:2]], ['tone', 'symbol'])
+                    self.assertTrue(events[0][1]['on'])
+                    self.assertEqual(events[0][1]['at'], events[1][1]['at'])
+
+    def test_iambic_squeeze_remembers_paddle_held_across_opposite_start(self):
+        engine = self.engine(keyer_mode='iambic')
+        events = engine.key(0, True, 0)
+        events += engine.key(1, True, .01)
+        events += engine.tick(.17)  # Dash starts at .16 while dot is still held.
+        events += engine.key(0, False, .18)
+        events += engine.key(1, False, .19)
+        events += engine.tick(.9)
+        self.assertEqual(values(events, 'symbol', 'symbol'), [1, 2, 1])
+        self.assertEqual(values(events, 'commit', 'symbols'), [(1, 2, 1)])
+
+    def test_iambic_same_paddle_retap_during_mark_does_not_latch_extra_element(self):
+        engine = self.engine(keyer_mode='iambic')
+        events = engine.key(0, True, 0)
+        events += engine.key(0, False, .01)
+        events += engine.key(0, True, .02)
+        events += engine.key(0, False, .03)
+        events += engine.tick(.4)
+        self.assertEqual(values(events, 'symbol', 'symbol'), [1])
+        self.assertEqual(values(events, 'commit', 'symbols'), [(1,)])
+
+    def test_iambic_release_during_inner_space_keeps_exact_letter_gap(self):
+        engine = self.engine(keyer_mode='iambic')
+        engine.key(0, True, 0)
+        engine.key(0, False, .15)  # Tone ended at .08, next element would start at .16.
+        self.assertFalse(values(engine.tick(.319), 'commit', 'symbols'))
+        events = engine.tick(.32)
+        self.assertEqual(values(events, 'commit', 'symbols'), [(1,)])
+        self.assertEqual(values(events, 'commit', 'at'), [.32])
+
     def test_iambic_new_press_during_character_gap_starts_immediately(self):
         engine = self.engine(keyer_mode='iambic')
         engine.key(0, True, 0)

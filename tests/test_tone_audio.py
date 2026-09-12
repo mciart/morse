@@ -3,6 +3,8 @@
 from array import array
 import os
 import sys
+import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -13,7 +15,7 @@ from PyQt5.QtMultimedia import QAudio, QAudioFormat
 from PyQt5.QtCore import QBuffer, QEvent, QIODevice, QObject, pyqtSignal
 from PyQt5 import sip
 
-from tone_audio import ToneAudio, ToneRenderer
+from tone_audio import ToneAudio, ToneRenderer, _ToneOutput
 
 
 def pcm_samples(data):
@@ -67,6 +69,45 @@ class ToneRendererTests(unittest.TestCase):
         renderer.confirm(False)
         renderer.enabled = False
         self.assertEqual(renderer.render(1000), bytes(4000))
+
+    def test_first_dot_survives_on_and_off_before_any_audio_timer_tick(self):
+        renderer = ToneRenderer(sample_rate=48000, channels=1)
+        renderer.queue_tone(True, 10.0)
+        renderer.queue_tone(False, 10.08)
+        samples = pcm_samples(renderer.render(4800))
+        self.assertTrue(any(samples[480:3360]))  # The first 80 ms dot is audible.
+        self.assertTrue(all(value == 0 for value in samples[4128:]))
+        self.assertFalse(renderer.tone)
+
+    def test_batched_edges_preserve_dot_dash_lengths_and_gap(self):
+        renderer = ToneRenderer(sample_rate=48000, channels=1)
+        for active, timestamp in ((True, 10), (False, 10.08), (True, 10.16), (False, 10.4)):
+            renderer.queue_tone(active, timestamp)
+        samples = pcm_samples(renderer.render(24000))
+        self.assertTrue(any(samples[480:3360]))
+        self.assertTrue(all(value == 0 for value in samples[4800:7200]))
+        self.assertTrue(any(samples[8200:18720]))
+        self.assertTrue(all(value == 0 for value in samples[19680:]))
+
+    def test_reset_discards_queued_edges_and_new_input_after_idle_starts_immediately(self):
+        renderer = ToneRenderer(channels=1)
+        renderer.queue_tone(True, 10)
+        renderer.queue_tone(False, 10.08)
+        renderer.reset()
+        self.assertEqual(renderer.render(4800), bytes(9600))
+        renderer.queue_tone(True, 20)
+        renderer.queue_tone(False, 20.08)
+        self.assertTrue(any(pcm_samples(renderer.render(4800))))
+        renderer.queue_tone(True, 50)
+        renderer.queue_tone(False, 50.08)
+        self.assertTrue(any(pcm_samples(renderer.render(4800))))
+
+    def test_long_stale_catchup_is_discarded_instead_of_playing_a_burst(self):
+        renderer = ToneRenderer(channels=1)
+        renderer.queue_tone(True, 10)
+        renderer.queue_tone(False, 12)
+        self.assertEqual(renderer.render(96000), bytes(192000))
+        self.assertFalse(renderer.tone)
 
 
 class ToneAudioTests(unittest.TestCase):
@@ -263,7 +304,7 @@ class ToneAudioTests(unittest.TestCase):
 
     def test_native_endpoint_is_deleted_after_feeding_stops_before_parent_destruction(self):
         class FakeOutput(QObject):
-            stateChanged = pyqtSignal(int)
+            stateChanged = pyqtSignal(QAudio.State)
 
             def __init__(self, device, audio_format, parent):
                 super().__init__(parent)
@@ -293,7 +334,8 @@ class ToneAudioTests(unittest.TestCase):
                 pass
 
         parent = QObject()
-        audio = ToneAudio(parent)
+        audio = ToneAudio(parent, backend_enabled=False)
+        audio._backend_enabled = True
         audio._buffer_ms = 20
         device = Mock()
         device.isNull.return_value = False
@@ -318,6 +360,107 @@ class ToneAudioTests(unittest.TestCase):
             self.assertTrue(sip.isdeleted(replacement))
             self.assertTrue(sip.isdeleted(audio))
             self.assertTrue(sip.isdeleted(parent))
+
+
+class AudioThreadTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_audio_keeps_feeding_during_a_blocked_gui_and_worker_shutdown_owns_cleanup(self):
+        created = threading.Event()
+        packets, outputs, callback_threads = [], [], []
+        gui_thread = threading.get_ident()
+
+        class Endpoint:
+            def write(self, data):
+                callback_threads.append(threading.get_ident())
+                packets.append(bytes(data))
+                return len(data)
+
+        class NativeOutput(QObject):
+            stateChanged = pyqtSignal(QAudio.State)
+
+            def __init__(self, device, audio_format, parent):
+                super().__init__(parent)
+                self.endpoint = Endpoint()
+                self.capacity = 7680
+                outputs.append(self)
+                callback_threads.append(threading.get_ident())
+                created.set()
+
+            def start(self):
+                return self.endpoint
+
+            def stop(self):
+                callback_threads.append(threading.get_ident())
+
+            def error(self):
+                return QAudio.NoError
+
+            def setBufferSize(self, size):
+                self.capacity = size
+
+            def bufferSize(self):
+                return self.capacity
+
+            def bytesFree(self):
+                return self.capacity
+
+            def setVolume(self, value):
+                pass
+
+        device = Mock()
+        device.isNull.return_value = False
+        audio_format = QAudioFormat()
+        audio_format.setSampleRate(48000)
+        audio_format.setChannelCount(2)
+        with patch.object(_ToneOutput, '_resolve_device', return_value=device), \
+                patch.object(_ToneOutput, '_choose_format', return_value=audio_format), \
+                patch('tone_audio.QAudioOutput', NativeOutput):
+            audio = ToneAudio()
+            try:
+                audio.prepare()
+                self.assertTrue(created.wait(2))
+                before = len(packets)
+                # No Qt GUI event processing: a synchronous paint/layout can
+                # block here while the audio thread must continue rendering.
+                time.sleep(0.08)
+                self.assertGreater(len(packets), before + 3)
+                packets.clear()
+                timestamp = time.monotonic()
+                audio.set_tone(True, timestamp=timestamp)
+                audio.set_tone(False, timestamp=timestamp + 0.08)
+                time.sleep(0.08)
+                self.assertTrue(any(value for packet in packets for value in packet))
+                worker, thread = audio._worker, audio._audio_thread
+                audio.shutdown()
+                audio.shutdown()
+                self.assertFalse(thread.isRunning())
+                self.assertTrue(sip.isdeleted(worker))
+                self.assertTrue(all(sip.isdeleted(output) for output in outputs))
+                self.assertNotIn(gui_thread, callback_threads)
+            finally:
+                audio.shutdown()
+                audio.deleteLater()
+
+            # Programmatic window destruction also joins the thread before
+            # QObject deletes the controller's QThread child.
+            created.clear()
+            parent = QObject()
+            owned_audio = ToneAudio(parent)
+            try:
+                owned_audio.prepare()
+                self.assertTrue(created.wait(2))
+                worker = owned_audio._worker
+                parent.deleteLater()
+                self.app.sendPostedEvents(None, QEvent.DeferredDelete)
+                self.assertTrue(sip.isdeleted(worker))
+                self.assertTrue(sip.isdeleted(owned_audio))
+            finally:
+                if not sip.isdeleted(owned_audio):
+                    owned_audio.shutdown()
+                    parent.deleteLater()
 
 
 if __name__ == "__main__":

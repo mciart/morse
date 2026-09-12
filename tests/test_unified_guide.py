@@ -36,6 +36,72 @@ class UnifiedGuideTests(TestCase):
         self.assertEqual(len(extras), 39)
         self.assertTrue(all(len(i['code']) == 7 for i in extras))
 
+    def test_minimize_keeps_independent_window_and_close_hides_without_stopping_input(self):
+        view = self.window.codeslayoutview
+        listener = self.window.listenerThread
+        self.assertEqual(view.windowType(), morse.Qt.Window)
+        self.assertIsNone(view.parentWidget())
+        self.assertTrue(view.windowFlags() & morse.Qt.WindowMinimizeButtonHint)
+        view.showMinimized()
+        self.app.processEvents()
+        self.assertTrue(view.isMinimized())
+        self.assertTrue(view.isVisible())
+        view.showNormal()
+        view.close()
+        self.app.processEvents()
+        self.assertTrue(view.isHidden())
+        self.assertIs(self.window.listenerThread, listener)
+        self.assertTrue(self.window.engine_timer.isActive())
+        self.assertFalse(view.config.get('off', False))
+
+    def test_prefix_highlighting_does_not_restyle_or_relayout_key_text(self):
+        from virtual_keyboard import KeyCap, KeyLabel
+
+        self.window.engine_timer.stop()
+        view = self.window.codeslayoutview
+        view.reset()
+        self.app.processEvents()
+        bounds = {code: cap.geometry() for code, cap in view.crs.items()}
+        with patch.object(KeyCap, 'setStyleSheet', side_effect=AssertionError('restyling on input')), \
+                patch.object(KeyLabel, 'setText', side_effect=AssertionError('relayout on input')):
+            view.Dit()
+            view.Dah()
+        self.app.processEvents()
+        for code, cap in view.crs.items():
+            self.assertEqual(cap.geometry(), bounds[code])
+            self.assertEqual(cap.enabled(), code.startswith('12') and cap.is_available)
+            self.assertEqual(cap.codeline.text(), cap.code)
+        self.assertEqual(view.keystroke_crs_map['A'].codeline._prefix_length, 2)
+
+    def test_painted_caps_keep_theme_modifier_and_candidate_states(self):
+        from ui_theme import THEME_COLORS
+
+        self.window.engine_timer.stop()
+        view = self.window.codeslayoutview
+        candidates = sorted((cap for cap in view.crs.values() if cap.is_prediction),
+                            key=lambda cap: cap.item['target'])
+        ctrl = view.keystroke_crs_map['CTRL']
+        for theme in ('light', 'dark'):
+            self.window.themeComboBox.setCurrentIndex(self.window.themeComboBox.findData(theme))
+            self.app.processEvents()
+            with patch.object(self.window.typestate, 'getpredictions', return_value=['the']) as predictions:
+                view.reset()
+                view.setOutputState(('ctrl',), True)
+                self.assertEqual(ctrl._appearance[0], THEME_COLORS['highlight'])
+                self.assertEqual(ctrl.character._foreground, THEME_COLORS['highlight_text'])
+                self.assertEqual(candidates[0].character._foreground, THEME_COLORS['text'])
+                self.assertEqual(candidates[1].character._foreground, THEME_COLORS['disabled'])
+                view.Dit()
+                self.assertEqual(candidates[0].character._foreground, THEME_COLORS['disabled'])
+                cap_a = view.keystroke_crs_map['A']
+                self.assertEqual(cap_a.codeline._prefix_color, THEME_COLORS['success'])
+                self.assertEqual(cap_a.codeline._prefix_length, 1)
+                predictions.return_value = ['of', 'a']
+                view.reset()
+                self.assertEqual(candidates[0].character.text(), '1 · of')
+                self.assertEqual(candidates[1].character.text(), '2 · a')
+                self.assertEqual(candidates[1].character._foreground, THEME_COLORS['text'])
+
     def test_keyboard_legends_match_us_keys_and_keep_standard_capitalization(self):
         view = self.window.codeslayoutview
         expected = {
@@ -271,7 +337,10 @@ class UnifiedGuideTests(TestCase):
         self.assertTrue(self.window.codeslayoutview.testAttribute(morse.Qt.WA_ShowWithoutActivating))
 
     def test_changing_theme_preserves_previously_saved_settings(self):
-        self.window.guideLayoutComboBox.setCurrentIndex(self.window.guideLayoutComboBox.findData('mouse'))
+        # Legacy mappings remain available to internal dispatch, while saved
+        # settings and subsequent starts use the unified keyboard guide.
+        self.window.changeLayout('mouse')
+        self.assertEqual(self.layout.active_layout_name, 'mouse')
         self.window.minLetterPauseEdit.setValue(1234)
         self.window.saveSettings()
         for choice in ('light', 'dark'):
@@ -279,5 +348,9 @@ class UnifiedGuideTests(TestCase):
         with open(self.window.configManager.config_file, encoding='utf-8') as stream:
             config = json.load(stream)
         self.assertEqual(config['theme'], 'dark')
-        self.assertEqual(config['guide_layout'], 'mouse')
+        self.assertEqual(config['guide_layout'], 'desktop')
         self.assertEqual(config['minLetterPause'], 1234)
+        self.window.GOButton.click()
+        self.app.processEvents()
+        self.views.append(self.window.codeslayoutview)
+        self.assertEqual(self.layout.active_layout_name, 'desktop')

@@ -76,6 +76,24 @@ class KeyerIntegrationTests(unittest.TestCase):
         self.assertEqual(self.backend.mock_calls,
                          [call.send('e'), call.send('t')])
 
+    def test_first_dot_queued_during_ui_work_reaches_pcm_with_its_full_duration(self):
+        self.engine(1)
+        listener = self.window.listenerThread
+        listener.blockSignals(True)
+        self.key(0, True, 0)
+        self.key(0, False, .08)
+        listener.blockSignals(False)
+        self.window.drainInput()
+        renderer = self.window.audio.renderer
+        self.assertFalse(renderer.tone)
+        self.assertEqual(self.window.currentCharacter, [1])
+        # Both edges reached the UI before the audio timer rendered anything.
+        # The original boolean gate produced 100 ms of silence here.
+        pcm = renderer.render(4800)
+        frame_bytes = renderer.bytes_per_frame
+        self.assertTrue(any(pcm[480 * frame_bytes:3360 * frame_bytes]))
+        self.assertFalse(any(pcm[4128 * frame_bytes:]))
+
     def test_explicit_commit_stops_queued_audio_and_invalid_code_is_visible(self):
         self.engine(3)
         for index in range(8):
@@ -120,6 +138,8 @@ class KeyerIntegrationTests(unittest.TestCase):
         self.assertFalse(self.window.audio.renderer.tone)
 
     def test_audio_settings_keep_native_output_and_errors_are_visible_in_settings(self):
+        self.window.config['withsound'] = True
+        self.window.withSound.setChecked(True)
         output = Mock()
         self.window.audio._output = output
         self.window.toneFrequencyEdit.setValue(720)

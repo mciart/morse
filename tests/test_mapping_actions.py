@@ -107,6 +107,11 @@ class MappingActionTests(unittest.TestCase):
         self.app.processEvents()
         self.views.append(self.window.codeslayoutview)
         self.assertIsNotNone(self.window.listenerThread)
+        self.assertEqual(self.layout.active_layout_name, "desktop")
+        # The normal settings now always open the unified guide. These legacy
+        # mapping tests deliberately enter the compatibility layout internally.
+        self.window.changeLayout('main')
+        self.views.append(self.window.codeslayoutview)
         self.assertEqual(self.layout.active_layout_name, "main")
 
     def enter_code(self, code):
