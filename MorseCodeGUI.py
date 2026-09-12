@@ -7,6 +7,7 @@ import sys
 import platform
 import threading
 import time
+from html import escape
 from collections import OrderedDict
 from enum import Enum
 from threading import Thread
@@ -14,7 +15,7 @@ from threading import Thread
 # Third-party imports
 from PyQt5 import QtCore, QtMultimedia
 from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio, QAudioFormat, QAudioOutput
-from PyQt5.QtCore import QIODevice, QFile, QThread, pyqtSignal, QTimer, Qt, QObject
+from PyQt5.QtCore import QIODevice, QFile, QThread, pyqtSignal, QTimer, Qt, QObject, QLocale, QTranslator, QLibraryInfo
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout,
                              QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
@@ -27,6 +28,7 @@ import mouse
 import pressagio.callback
 import pressagio
 import icons_rc
+from ui_theme import apply_dark_theme, THEME_COLORS
 
 def get_user_data_dir(app_name="MorseWriter"):
     """
@@ -89,10 +91,10 @@ class AudioDeviceSelector(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle('Select Audio Device')
+        self.setWindowTitle('音频设备')
         self.layout = QVBoxLayout()
 
-        self.label = QLabel('Select Audio Device:')
+        self.label = QLabel('选择音频设备：')
         self.layout.addWidget(self.label)
 
         self.device_selector = QComboBox()
@@ -100,7 +102,7 @@ class AudioDeviceSelector(QWidget):
         self.device_selector.currentIndexChanged.connect(self.device_changed)
         self.layout.addWidget(self.device_selector)
 
-        self.test_audio_button = QPushButton('Play Test Sound')
+        self.test_audio_button = QPushButton('播放测试音')
         self.test_audio_button.clicked.connect(self.test_audio)
         self.layout.addWidget(self.test_audio_button)
 
@@ -119,11 +121,11 @@ class AudioDeviceSelector(QWidget):
 
     def list_available_devices(self):
         default_device = QAudioDeviceInfo.defaultOutputDevice()
-        self.device_selector.addItem(default_device.deviceName(), default_device)
+        self.device_selector.addItem("默认输出设备", default_device)
 
         for device in QAudioDeviceInfo.availableDevices(QAudio.AudioOutput):
             device_names = [self.device_selector.itemText(i) for i in range(self.device_selector.count())]
-            if device.deviceName() not in device_names:
+            if device.deviceName() != default_device.deviceName() and device.deviceName() not in device_names:
                 self.device_selector.addItem(device.deviceName(), device)
 
     def play_audio(self, file):
@@ -138,7 +140,7 @@ class AudioDeviceSelector(QWidget):
 
     def select_audio_file(self):
         file_dialog = QFileDialog()
-        self.audio_file, _ = file_dialog.getOpenFileName(self, "Select Audio File", "", "Audio Files (*.wav)")
+        self.audio_file, _ = file_dialog.getOpenFileName(self, "选择音频文件", "", "音频文件 (*.wav)")
         if self.audio_file:
             print(f"Selected audio file: {self.audio_file} to play on device {self.selected_device.deviceName()}")
             self.play_audio(self.audio_file)
@@ -232,32 +234,32 @@ class ConfigManager:
         "LESSTHAN": {'label': '<', 'key_code': ',', 'character': '<', 'arg': None},
         "MORETHAN": {'label': '>', 'key_code': '.', 'character': '>', 'arg': None},
         "CIRCONFLEX": {'label': '^', 'key_code': '6', 'character': '^', 'arg': None},
-        "ENTER": {'label': 'enter', 'key_code': 'enter', 'character': '\n', 'arg': None},
-        "SPACE": {'label': 'space', 'key_code': 'space', 'character': ' ', 'arg': None},
-        "BACKSPACE": {'label': 'bckspc', 'key_code': 'backspace', 'character': '\x08', 'arg': None},
+        "ENTER": {'label': '回车', 'key_code': 'enter', 'character': '\n', 'arg': None},
+        "SPACE": {'label': '空格', 'key_code': 'space', 'character': ' ', 'arg': None},
+        "BACKSPACE": {'label': '退格', 'key_code': 'backspace', 'character': '\x08', 'arg': None},
         "TAB": {'label': 'tab', 'key_code': 'tab', 'character': '\t', 'arg': None},
-        "UNDERSCORE": {'label': 'underscore', 'key_code': '_', 'character': '_', 'arg': None},
-        "PAGEUP": {'label': 'pageup', 'key_code': 'page_up', 'character': None, 'arg': None},
-        "PAGEDOWN": {'label': 'pagedwn', 'key_code': 'page_down', 'character': None, 'arg': None},
-        "LEFTARROW": {'label': 'left', 'key_code': 'left', 'character': None, 'arg': None},
-        "RIGHTARROW": {'label': 'right', 'key_code': 'right', 'character': None, 'arg': None},
-        "UPARROW": {'label': 'up', 'key_code': 'up', 'character': None, 'arg': None},
-        "DOWNARROW": {'label': 'down', 'key_code': 'down', 'character': None, 'arg': None},
+        "UNDERSCORE": {'label': '_', 'key_code': '_', 'character': '_', 'arg': None},
+        "PAGEUP": {'label': '上一页', 'key_code': 'page_up', 'character': None, 'arg': None},
+        "PAGEDOWN": {'label': '下一页', 'key_code': 'page_down', 'character': None, 'arg': None},
+        "LEFTARROW": {'label': '左', 'key_code': 'left', 'character': None, 'arg': None},
+        "RIGHTARROW": {'label': '右', 'key_code': 'right', 'character': None, 'arg': None},
+        "UPARROW": {'label': '上', 'key_code': 'up', 'character': None, 'arg': None},
+        "DOWNARROW": {'label': '下', 'key_code': 'down', 'character': None, 'arg': None},
         "ESCAPE": {'label': 'esc', 'key_code': 'esc', 'character': None, 'arg': None},
-        "HOME": {'label': 'home', 'key_code': 'home', 'character': None, 'arg': None},
-        "END": {'label': 'end', 'key_code': 'end', 'character': None, 'arg': None},
-        "DELETE": {'label': 'del', 'key_code': 'delete', 'character': None, 'arg': None},
+        "HOME": {'label': '行首', 'key_code': 'home', 'character': None, 'arg': None},
+        "END": {'label': '行尾', 'key_code': 'end', 'character': None, 'arg': None},
+        "DELETE": {'label': '删除', 'key_code': 'delete', 'character': None, 'arg': None},
         "SHIFT": {'label': 'shift', 'key_code': 'shift', 'character': None, 'arg': None},
-        "RSHIFT": {'label': 'rshift', 'key_code': 'right shift', 'character': None, 'arg': None},
-        "LSHIFT": {'label': 'lshift', 'key_code': 'left shift', 'character': None, 'arg': None},
+        "RSHIFT": {'label': '右Shift', 'key_code': 'right shift', 'character': None, 'arg': None},
+        "LSHIFT": {'label': '左Shift', 'key_code': 'left shift', 'character': None, 'arg': None},
         "CTRL": {'label': 'ctrl', 'key_code': 'ctrl', 'character': None, 'arg': None},
-        "RCTRL": {'label': 'rctrl', 'key_code': 'right ctrl', 'character': None, 'arg': None},
-        "LCTRL": {'label': 'lctrl', 'key_code': 'left ctrl', 'character': None, 'arg': None},
+        "RCTRL": {'label': '右Ctrl', 'key_code': 'right ctrl', 'character': None, 'arg': None},
+        "LCTRL": {'label': '左Ctrl', 'key_code': 'left ctrl', 'character': None, 'arg': None},
         "ALT": {'label': 'alt', 'key_code': 'alt', 'character': None, 'arg': None},
-        "INSERT": {'label': 'insert', 'key_code': 'insert', 'character': None, 'arg': None},
+        "INSERT": {'label': '插入', 'key_code': 'insert', 'character': None, 'arg': None},
         "WINDOWS": {'label': 'win', 'key_code': 'cmd', 'character': None, 'arg': None},
-        "STARTMENU": {'label': 'startmenu', 'key_code': 'start', 'character': None, 'arg': None},
-        "CAPSLOCK": {'label': 'caps', 'key_code': 'caps lock', 'character': None, 'arg': None},
+        "STARTMENU": {'label': '开始菜单', 'key_code': 'start', 'character': None, 'arg': None},
+        "CAPSLOCK": {'label': '大写锁定', 'key_code': 'caps lock', 'character': None, 'arg': None},
         "F1": {'label': 'F1', 'key_code': 'f1', 'character': None, 'arg': None},
         "F2": {'label': 'F2', 'key_code': 'f2', 'character': None, 'arg': None},
         "F3": {'label': 'F3', 'key_code': 'f3', 'character': None, 'arg': None},
@@ -270,41 +272,41 @@ class ConfigManager:
         "F10": {'label': 'F10', 'key_code': 'f10', 'character': None, 'arg': None},
         "F11": {'label': 'F11', 'key_code': 'f11', 'character': None, 'arg': None},
         "F12": {'label': 'F12', 'key_code': 'f12', 'character': None, 'arg': None},
-        "REPEATMODE": {'label': 'repeat', 'key_code': 'REPEATMODE', 'character': None, 'arg': 0},
-        "SOUND": {'label': 'snd', 'key_code': 'unknown', 'character': None, 'arg': 8},
-        "CODESET": {'label': 'code', 'key_code': 'unknown', 'character': None, 'arg': 9},
-        "MOUSERIGHT5": {'label': 'ms right 5', 'key_code': 'MOUSERIGHT5', 'character': None, 'arg': 2},
-        "MOUSEUP5": {'label': 'ms up 5', 'key_code': 'MOUSEUP5', 'character': None, 'arg': 3},
-        "MOUSECLICKLEFT": {'label': 'ms clkleft', 'key_code': 'MOUSECLICKLEFT', 'character': None, 'arg': 4},
-        "MOUSEDBLCLICKLEFT": {'label': 'ms dblclkleft', 'key_code': 'MOUSEDBLCLICKLEFT', 'character': None, 'arg': 5},
-        "MOUSECLKHLDLEFT": {'label': 'ms hldleft', 'key_code': 'MOUSECLKHLDLEFT', 'character': None, 'arg': 6},
-        "MOUSEUPLEFT5": {'label': 'ms leftup 5', 'key_code': 'MOUSEUPLEFT5', 'character': None, 'arg': 7},
-        "MOUSEDOWNLEFT5": {'label': 'ms leftdown 5', 'key_code': 'MOUSEDOWNLEFT5', 'character': None, 'arg': 8},
-        "MOUSERELEASEHOLD": {'label': 'ms release', 'key_code': 'MOUSERELEASEHOLD', 'character': None, 'arg': 9},
-        "MOUSELEFT5": {'label': 'ms left 5', 'key_code': 'MOUSELEFT5', 'character': None, 'arg': 0},
-        "MOUSEDOWN5": {'label': 'ms down 5', 'key_code': 'MOUSEDOWN5', 'character': None, 'arg': 1},
-        "MOUSECLICKRIGHT": {'label': 'ms clkright', 'key_code': 'MOUSECLICKRIGHT', 'character': None, 'arg': 2},
-        "MOUSEDBLCLICKRIGHT": {'label': 'ms dblclkright', 'key_code': 'MOUSEDBLCLICKRIGHT', 'character': None, 'arg': 3},
-        "MOUSECLKHLDRIGHT": {'label': 'ms hldright', 'key_code': 'MOUSECLKHLDRIGHT', 'character': None, 'arg': 4},
-        "MOUSEUPRIGHT5": {'label': 'ms rightup 5', 'key_code': 'MOUSEUPRIGHT5', 'character': None, 'arg': 5},
-        "MOUSEDOWNRIGHT5": {'label': 'ms rightdown 5', 'key_code': 'MOUSEDOWNRIGHT5', 'character': None, 'arg': 6},
-        "MOUSENORMALMODE": {'label': 'normal mode', 'key_code': 'NORMALMODE', 'character': None, 'arg': 7},
-        "MOUSEUP40": {'label': 'ms up 40', 'key_code': 'MOUSEUP40', 'character': None, 'arg': 8},
-        "MOUSEUP250": {'label': 'ms up 250', 'key_code': 'MOUSEUP250', 'character': None, 'arg': 9},
-        "MOUSEDOWN40": {'label': 'ms down 40', 'key_code': 'MOUSEDOWN40', 'character': None, 'arg': 0},
-        "MOUSEDOWN250": {'label': 'ms down 250', 'key_code': 'MOUSEDOWN250', 'character': None, 'arg': 1},
-        "MOUSELEFT40": {'label': 'ms left 40', 'key_code': 'MOUSELEFT40', 'character': None, 'arg': 2},
-        "MOUSELEFT250": {'label': 'ms left 250', 'key_code': 'MOUSELEFT250', 'character': None, 'arg': 3},
-        "MOUSERIGHT40": {'label': 'ms right 40', 'key_code': 'MOUSERIGHT40', 'character': None, 'arg': 4},
-        "MOUSERIGHT250": {'label': 'ms right 250', 'key_code': 'MOUSERIGHT250', 'character': None, 'arg': 5},
-        "MOUSEUPLEFT40": {'label': 'ms leftup 40', 'key_code': 'MOUSEUPLEFT40', 'character': None, 'arg': 6},
-        "MOUSEUPLEFT250": {'label': 'ms leftup 250', 'key_code': 'MOUSEUPLEFT250', 'character': None, 'arg': 7},
-        "MOUSEDOWNLEFT40": {'label': 'ms leftdown 40', 'key_code': 'MOUSEDOWNLEFT40', 'character': None, 'arg': 8},
-        "MOUSEDOWNLEFT250": {'label': 'ms leftdown 250', 'key_code': 'MOUSEDOWNLEFT250', 'character': None, 'arg': 9},
-        "MOUSEUPRIGHT40": {'label': 'ms rightup 40', 'key_code': 'MOUSEUPRIGHT40', 'character': None, 'arg': 0},
-        "MOUSEUPRIGHT250": {'label': 'ms rightup 250', 'key_code': 'MOUSEUPRIGHT250', 'character': None, 'arg': 1},
-        "MOUSEDOWNRIGHT40": {'label': 'ms rightdown 40', 'key_code': 'MOUSEDOWNRIGHT40', 'character': None, 'arg': 2},
-        "MOUSEDOWNRIGHT250": {'label': 'ms rightdown 250', 'key_code': 'MOUSEDOWNRIGHT250', 'character': None, 'arg': 3}
+        "REPEATMODE": {'label': '重复', 'key_code': 'REPEATMODE', 'character': None, 'arg': 0},
+        "SOUND": {'label': '声音', 'key_code': 'unknown', 'character': None, 'arg': 8},
+        "CODESET": {'label': '码表', 'key_code': 'unknown', 'character': None, 'arg': 9},
+        "MOUSERIGHT5": {'label': '右移5', 'key_code': 'MOUSERIGHT5', 'character': None, 'arg': 2},
+        "MOUSEUP5": {'label': '上移5', 'key_code': 'MOUSEUP5', 'character': None, 'arg': 3},
+        "MOUSECLICKLEFT": {'label': '左键单击', 'key_code': 'MOUSECLICKLEFT', 'character': None, 'arg': 4},
+        "MOUSEDBLCLICKLEFT": {'label': '左键双击', 'key_code': 'MOUSEDBLCLICKLEFT', 'character': None, 'arg': 5},
+        "MOUSECLKHLDLEFT": {'label': '按住左键', 'key_code': 'MOUSECLKHLDLEFT', 'character': None, 'arg': 6},
+        "MOUSEUPLEFT5": {'label': '左上5', 'key_code': 'MOUSEUPLEFT5', 'character': None, 'arg': 7},
+        "MOUSEDOWNLEFT5": {'label': '左下5', 'key_code': 'MOUSEDOWNLEFT5', 'character': None, 'arg': 8},
+        "MOUSERELEASEHOLD": {'label': '松开鼠标', 'key_code': 'MOUSERELEASEHOLD', 'character': None, 'arg': 9},
+        "MOUSELEFT5": {'label': '左移5', 'key_code': 'MOUSELEFT5', 'character': None, 'arg': 0},
+        "MOUSEDOWN5": {'label': '下移5', 'key_code': 'MOUSEDOWN5', 'character': None, 'arg': 1},
+        "MOUSECLICKRIGHT": {'label': '右键单击', 'key_code': 'MOUSECLICKRIGHT', 'character': None, 'arg': 2},
+        "MOUSEDBLCLICKRIGHT": {'label': '右键双击', 'key_code': 'MOUSEDBLCLICKRIGHT', 'character': None, 'arg': 3},
+        "MOUSECLKHLDRIGHT": {'label': '按住右键', 'key_code': 'MOUSECLKHLDRIGHT', 'character': None, 'arg': 4},
+        "MOUSEUPRIGHT5": {'label': '右上5', 'key_code': 'MOUSEUPRIGHT5', 'character': None, 'arg': 5},
+        "MOUSEDOWNRIGHT5": {'label': '右下5', 'key_code': 'MOUSEDOWNRIGHT5', 'character': None, 'arg': 6},
+        "MOUSENORMALMODE": {'label': '普通模式', 'key_code': 'NORMALMODE', 'character': None, 'arg': 7},
+        "MOUSEUP40": {'label': '上移40', 'key_code': 'MOUSEUP40', 'character': None, 'arg': 8},
+        "MOUSEUP250": {'label': '上移250', 'key_code': 'MOUSEUP250', 'character': None, 'arg': 9},
+        "MOUSEDOWN40": {'label': '下移40', 'key_code': 'MOUSEDOWN40', 'character': None, 'arg': 0},
+        "MOUSEDOWN250": {'label': '下移250', 'key_code': 'MOUSEDOWN250', 'character': None, 'arg': 1},
+        "MOUSELEFT40": {'label': '左移40', 'key_code': 'MOUSELEFT40', 'character': None, 'arg': 2},
+        "MOUSELEFT250": {'label': '左移250', 'key_code': 'MOUSELEFT250', 'character': None, 'arg': 3},
+        "MOUSERIGHT40": {'label': '右移40', 'key_code': 'MOUSERIGHT40', 'character': None, 'arg': 4},
+        "MOUSERIGHT250": {'label': '右移250', 'key_code': 'MOUSERIGHT250', 'character': None, 'arg': 5},
+        "MOUSEUPLEFT40": {'label': '左上40', 'key_code': 'MOUSEUPLEFT40', 'character': None, 'arg': 6},
+        "MOUSEUPLEFT250": {'label': '左上250', 'key_code': 'MOUSEUPLEFT250', 'character': None, 'arg': 7},
+        "MOUSEDOWNLEFT40": {'label': '左下40', 'key_code': 'MOUSEDOWNLEFT40', 'character': None, 'arg': 8},
+        "MOUSEDOWNLEFT250": {'label': '左下250', 'key_code': 'MOUSEDOWNLEFT250', 'character': None, 'arg': 9},
+        "MOUSEUPRIGHT40": {'label': '右上40', 'key_code': 'MOUSEUPRIGHT40', 'character': None, 'arg': 0},
+        "MOUSEUPRIGHT250": {'label': '右上250', 'key_code': 'MOUSEUPRIGHT250', 'character': None, 'arg': 1},
+        "MOUSEDOWNRIGHT40": {'label': '右下40', 'key_code': 'MOUSEDOWNRIGHT40', 'character': None, 'arg': 2},
+        "MOUSEDOWNRIGHT250": {'label': '右下250', 'key_code': 'MOUSEDOWNRIGHT250', 'character': None, 'arg': 3}
         }
         self.config_file = config_file or os.path.join(user_data_dir, 'config.json')
         self.default_config = default_config
@@ -569,7 +571,7 @@ class LayoutManager:
     def load_layouts(self):
         """Loads layout data from a JSON file without assigning actions."""
         try:
-            with open(self.layout_file, "r") as f:
+            with open(self.layout_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.layouts = {k: v for k, v in data['layouts'].items()}
             self.main_layout_name = data.get('mainlayout')
@@ -904,7 +906,8 @@ class Window(QDialog):
         self.setLayout(mainLayout)
         self.setIcon()
         self.trayIcon.show()
-        self.setWindowTitle("MorseWriter V2.1")
+        self.setWindowTitle("摩斯输入设置")
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
         self.resize(400, 300)
 
 
@@ -1007,16 +1010,17 @@ class Window(QDialog):
         warn_user = (self.keySelectionRadioTwoKey.isChecked() and key_one == key_two) or (self.keySelectionRadioThreeKey.isChecked() and (key_one == key_two or key_one == key_three or key_two == key_three))
 
         if warn_user:
-            QMessageBox.warning(self, "MorseWriter",
-                                    "Input keys can not be similar, please make sure using different keys.")
+            QMessageBox.warning(self, "摩斯输入",
+                                    "输入按键不能重复，请为每个位置选择不同的按键。")
             return
 
         self.iconComboBoxKeyOne.currentData()
         if self.trayIcon.isVisible():
-            QMessageBox.information(self, "MorseWriter",
-                                    "The program will run in the system tray. To terminate the program, choose <b>Quit</b> in the context menu of the system tray entry.")
+            QMessageBox.information(self, "摩斯输入",
+                                    "程序将在系统托盘中运行。点击窗口的 × 可最小化，输入会继续运行。点击托盘图标可恢复窗口；需要关闭程序时，请在托盘菜单中选择<b>退出</b>。")
             self.hide()
         self.config = self.collect_config()
+        self.onOffAction.setText("暂停输入")
         self.init()
         if not self.listenerThread:
             self.startKeyListener()
@@ -1026,8 +1030,14 @@ class Window(QDialog):
         self.startKeyListener()
 
     def closeEvent(self, event):
+        event.ignore()
+        self.showMinimized()
+
+    def quitApplication(self):
         self.stopIt()
-        event.accept()
+        self.audioSelector.hide()
+        self.hide()
+        self.trayIcon.hide()
         QApplication.instance().quit()
 
     def setIcon(self):
@@ -1036,14 +1046,14 @@ class Window(QDialog):
         self.setWindowIcon(icon)
 
     def iconActivated(self, reason):
-        #if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
-        #     self.iconComboBox.setCurrentIndex((self.iconComboBox.currentIndex() + 1) % self.iconComboBox.count())
-        if reason == QSystemTrayIcon.MiddleClick:
-            self.showMessage()
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.showCurrentWindow()
 
-    def showMessage(self):
-        icon = QSystemTrayIcon.MessageIcon(self.typeComboBox.itemData(self.typeComboBox.currentIndex()))
-        self.trayIcon.showMessage(self.titleEdit.text(), self.bodyEdit.toPlainText(), icon, self.durationSpinBox.value() * 1000)
+    def showCurrentWindow(self):
+        target = self.codeslayoutview if self.codeslayoutview is not None else self
+        target.showNormal()
+        target.raise_()
+        target.activateWindow()
 
     def mkKeyStrokeComboBox (self, items, currentkey, valuedict=None):
         box = QComboBox()
@@ -1058,15 +1068,15 @@ class Window(QDialog):
         return box
 
     def createIconGroupBox(self):
-        self.iconGroupBox = QGroupBox("Input Settings")
+        self.iconGroupBox = QGroupBox("输入设置")
 
-        self.keySelectionRadioOneKey = QRadioButton("One Key")
-        self.keySelectionRadioTwoKey = QRadioButton("Two Key")
-        self.keySelectionRadioThreeKey = QRadioButton("Three Key")
+        self.keySelectionRadioOneKey = QRadioButton("单键")
+        self.keySelectionRadioTwoKey = QRadioButton("双键")
+        self.keySelectionRadioThreeKey = QRadioButton("三键")
 
         inputSettingsLayout = QVBoxLayout()
 
-        inputRadioGroup = QGroupBox("Number of keys")
+        inputRadioGroup = QGroupBox("按键数量")
         inputRadioButtonsLayout = QHBoxLayout()
         inputRadioButtonsLayout.addWidget(self.keySelectionRadioOneKey)
         inputRadioButtonsLayout.addWidget(self.keySelectionRadioTwoKey)
@@ -1078,7 +1088,7 @@ class Window(QDialog):
 
         # Filter the keystrokes to only include those keys that are specified in morse_keys
         morse_keys = ["SPACE", "ENTER", "ONE", "TWO", "Z", "F8", "F9", "RCTRL", "LCTRL", "RSHIFT", "LSHIFT", "ALT", "CTRL"]
-        filtered_keystrokes = [(key, self.keystrokemap[key].name) for key in morse_keys if key in self.keystrokemap]
+        filtered_keystrokes = [(self.keystrokemap[key].label, self.keystrokemap[key].name) for key in morse_keys if key in self.keystrokemap]
 
         # Set up the combo box for the first key using the filtered list
         self.iconComboBoxKeyOne = self.mkKeyStrokeComboBox(
@@ -1117,9 +1127,9 @@ class Window(QDialog):
         for index, name in [[1,'One'], [2,'Two'], [3,'Three']]:
             getattr(self, 'keySelectionRadio%sKey'%(name)).setChecked(self.config.get('keylen', 1) == index)
 
-        maxDitTimeLabel = QLabel("MaxDitTime (ms):")
+        maxDitTimeLabel = QLabel("点划分界时长（毫秒）：")
         self.maxDitTimeEdit = QLineEdit(str(self.config.get("maxDitTime", "350")))
-        minLetterPauseLabel = QLabel("minLetterPause (ms):")
+        minLetterPauseLabel = QLabel("字符间隔（毫秒）：")
         self.minLetterPauseEdit = QLineEdit(str(self.config.get("minLetterPause", "1000")))
         TimingsLayout = QGridLayout()
         TimingsLayout.addWidget(maxDitTimeLabel, 0, 0)
@@ -1129,44 +1139,44 @@ class Window(QDialog):
         TimingsLayout.setRowStretch(4, 1)
         inputSettingsLayout.addLayout(TimingsLayout)
 
-        self.withDebug = QCheckBox("Debug On")
+        self.withDebug = QCheckBox("启用调试")
         self.withDebug.setChecked(self.config.get("debug", False))
         inputSettingsLayout.addWidget(self.withDebug)
 
-        self.withSound = QCheckBox("Audible beeps")
+        self.withSound = QCheckBox("播放提示音")
         self.withSound.setChecked(self.config.get("withsound", True))
         inputSettingsLayout.addWidget(self.withSound)
 
-        fontSizeScaleLabel = QLabel("FontSize (%):")
+        fontSizeScaleLabel = QLabel("字号缩放（%）：")
         self.fontSizeScaleEdit = QLineEdit(str(self.config.get("fontsizescale", "100")))
         viewSettingSec = QGridLayout()
         viewSettingSec.addWidget(fontSizeScaleLabel, 0, 0)
         viewSettingSec.addWidget(self.fontSizeScaleEdit, 0, 1, 1, 2)
-        self.upperCharsCheck = QCheckBox("Upper case chars")
+        self.upperCharsCheck = QCheckBox("字母大写显示")
         self.upperCharsCheck.setChecked(self.config.get("upperchars", True))
         viewSettingSec.addWidget(self.upperCharsCheck, 0, 3)
         viewSettingSec.setRowStretch(4, 1)
         inputSettingsLayout.addLayout(viewSettingSec)
 
         self.iconComboBoxSoundDit = self.mkKeyStrokeComboBox([
-                ["Dit Sound", "res/dit_sound.wav"],  # Ensure the path is correct
-                ["Default", "res/dit_sound.wav"]  # Optional: default sound path
+                ["点音", "res/dit_sound.wav"],  # Ensure the path is correct
+                ["默认", "res/dit_sound.wav"]  # Optional: default sound path
             ], self.config.get('SoundDit', "res/dit_sound.wav"))
 
         self.iconComboBoxSoundDah = self.mkKeyStrokeComboBox([
-            ["Dah Sound", "res/dah_sound.wav"],  # Ensure the path is correct
-            ["Default", "res/dah_sound.wav"]  # Optional: default sound path
+            ["划音", "res/dah_sound.wav"],  # Ensure the path is correct
+            ["默认", "res/dah_sound.wav"]  # Optional: default sound path
         ], self.config.get('SoundDah', "res/dah_sound.wav"))
 
         self.iconComboBoxSoundTyping = self.mkKeyStrokeComboBox([
-            ["Typing Sound", "res/typing_sound.wav"],
-            ["Default", "res/typing_sound.wav"]
+            ["输入音", "res/typing_sound.wav"],
+            ["默认", "res/typing_sound.wav"]
         ], self.config.get('SoundTyping', "res/typing_sound.wav"))
 
 
-        DitSoundLabel = QLabel("Dit sound: ")
-        DahSoundLabel = QLabel("Dah sound: ")
-        TypingSoundLabel = QLabel("Typing sound: ")
+        DitSoundLabel = QLabel("点音：")
+        DahSoundLabel = QLabel("划音：")
+        TypingSoundLabel = QLabel("输入音：")
         SoundConfigLayout = QGridLayout()
         SoundConfigLayout.addWidget(DitSoundLabel, 0, 0)
         SoundConfigLayout.addWidget(self.iconComboBoxSoundDit, 0, 1, 1, 4)
@@ -1175,12 +1185,12 @@ class Window(QDialog):
         SoundConfigLayout.addWidget(TypingSoundLabel, 2, 0)
         SoundConfigLayout.addWidget(self.iconComboBoxSoundTyping, 2, 1, 1, 4)
 
-        self.autostartCheckbox = QCheckBox("Auto-Start")
+        self.autostartCheckbox = QCheckBox("启动后自动开始输入")
         self.autostartCheckbox.setChecked(self.config.get("autostart", True))
         inputSettingsLayout.addWidget(self.autostartCheckbox)
 
         # Add Fast Morse Mode checkbox
-        self.fastMorseModeCheckbox = QCheckBox("Fast Morse Mode")
+        self.fastMorseModeCheckbox = QCheckBox("快速摩斯模式")
         self.fastMorseModeCheckbox.setChecked(self.config.get("fastMorseMode", False))
         inputSettingsLayout.addWidget(self.fastMorseModeCheckbox)
 
@@ -1188,10 +1198,10 @@ class Window(QDialog):
 
         inputSettingsLayout.addLayout(SoundConfigLayout)
 
-        inputRadioGroup = QGroupBox("Align window horizontally from")
+        inputRadioGroup = QGroupBox("码表水平位置（像素）")
         posAxisLayout = QHBoxLayout()
-        self.keyWinPosXLeftRadio = QRadioButton("Left")
-        self.keyWinPosXRightRadio = QRadioButton("Right")
+        self.keyWinPosXLeftRadio = QRadioButton("距左侧")
+        self.keyWinPosXRightRadio = QRadioButton("距右侧")
         if self.config.get("winxaxis", "left") == "left":
             self.keyWinPosXLeftRadio.setChecked(True)
         else:
@@ -1203,10 +1213,10 @@ class Window(QDialog):
         inputSettingsLayout.addWidget(inputRadioGroup)
         inputSettingsLayout.addWidget(self.keyWinPosXEdit)
 
-        inputRadioGroup = QGroupBox("Align window vertically from")
+        inputRadioGroup = QGroupBox("码表垂直位置（像素）")
         posAxisLayout = QHBoxLayout()
-        self.keyWinPosYTopRadio = QRadioButton("Top")
-        self.keyWinPosYBottomRadio = QRadioButton("Bottom")
+        self.keyWinPosYTopRadio = QRadioButton("距顶部")
+        self.keyWinPosYBottomRadio = QRadioButton("距底部")
         if self.config.get("winyaxis", "top") == "top":
             self.keyWinPosYTopRadio.setChecked(True)
         else:
@@ -1218,9 +1228,9 @@ class Window(QDialog):
         inputSettingsLayout.addWidget(inputRadioGroup)
         inputSettingsLayout.addWidget(self.keyWinPosYEdit)
 
-        self.DeviceButton = QPushButton("Audio Device")
-        self.SaveButton = QPushButton("Save Settings")
-        self.GOButton = QPushButton("GO!")
+        self.DeviceButton = QPushButton("音频设备")
+        self.SaveButton = QPushButton("保存设置")
+        self.GOButton = QPushButton("开始输入")
         buttonsSec = QHBoxLayout()
         buttonsSec.addWidget(self.DeviceButton)
         buttonsSec.addWidget(self.SaveButton)
@@ -1250,6 +1260,7 @@ class Window(QDialog):
         if self.codeslayoutview is None:
             return
         self.config['off'] = not self.config.get('off', False)
+        self.onOffAction.setText("继续输入" if self.config['off'] else "暂停输入")
         if self.config['off']:
             self.stopKeyListener()
         else:
@@ -1286,18 +1297,21 @@ class Window(QDialog):
         self.backToSettings()
 
     def createActions(self):
-        self.onOffAction = QAction("OnOff", self, triggered=self.toggleOnOff)
-        self.onOpenSettingsAction = QAction("Open Settings", self, triggered=self.onOpenSettings)
-        self.quitAction = QAction("Quit", self, triggered=self.close)
+        self.showWindowAction = QAction("显示窗口", self, triggered=self.showCurrentWindow)
+        self.onOffAction = QAction("继续输入" if self.config.get('off', False) else "暂停输入", self, triggered=self.toggleOnOff)
+        self.onOpenSettingsAction = QAction("打开设置", self, triggered=self.onOpenSettings)
+        self.quitAction = QAction("退出", self, triggered=self.quitApplication)
 
     def createTrayIcon(self):
         self.trayIconMenu = QMenu(self)
+        self.trayIconMenu.addAction(self.showWindowAction)
         self.trayIconMenu.addAction(self.onOffAction)
         self.trayIconMenu.addSeparator()
         self.trayIconMenu.addAction(self.onOpenSettingsAction)
         self.trayIconMenu.addSeparator()
         self.trayIconMenu.addAction(self.quitAction)
         self.trayIcon = QSystemTrayIcon(self)
+        self.trayIcon.setToolTip("摩斯输入")
         self.trayIcon.setContextMenu(self.trayIconMenu)
 
     def handle_key_event(self, key, is_press, role):
@@ -1532,13 +1546,15 @@ class CodeRepresentation(QWidget):
         charfontsize = int(3.0 * self.config['fontsizescale'] / 100)
         codefontsize = int(5.0 * self.config['fontsizescale'] / 100)
         toggled = self.toggled
+        colors = THEME_COLORS
+        label = self.item_label().upper() if self.config['upperchars'] else self.item_label()
         self.character.setText("<font style='background-color:{bgcolor};color:{color};font-weight:bold;' size='{fontsize}'>{text}</font>"
-                               .format(color='blue' if enabled else 'lightgrey',
-                                       text=(self.item_label().upper() if self.config['upperchars'] else self.item_label()),
-                                       fontsize=charfontsize, bgcolor="yellow" if toggled else "none"))
-        self.codeline.setText("<font size='{fontsize}'><font color='green'>{selecttext}</font><font color='{color}'>{text}</font></font>"
+                               .format(color=colors['highlight_text'] if toggled else colors['accent'] if enabled else colors['muted'],
+                                       text=escape(label),
+                                       fontsize=charfontsize, bgcolor=colors['highlight'] if toggled else "transparent"))
+        self.codeline.setText("<font size='{fontsize}'><font color='{selected}'>{selecttext}</font><font color='{color}'>{text}</font></font>"
                               .format(text=self.code[codeselectrange:], selecttext=self.code[:codeselectrange],
-                                      color='red' if enabled else 'lightgrey', fontsize=codefontsize))
+                                      selected=colors['success'], color=colors['danger'] if enabled else colors['muted'], fontsize=codefontsize))
 
 
     def enabled(self):
@@ -1580,31 +1596,11 @@ class ColorIndicatorWidget(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(16, 16)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: green;
-                border-radius: 8px;
-                padding: 8px;
-            }
-        """)
+        self.set_color("green")
 
     def set_color(self, color):
-        if color == "green":
-            self.setStyleSheet("""
-                QLabel {
-                    background-color: green;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-            """)
-        elif color == "red":
-            self.setStyleSheet("""
-                QLabel {
-                    background-color: red;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-            """)
+        status_color = THEME_COLORS['success'] if color == "green" else THEME_COLORS['danger']
+        self.setStyleSheet(f"QLabel {{ background-color: {status_color}; border-radius: 8px; }}")
 
 
 class CodesLayoutViewWidget(QWidget):
@@ -1620,7 +1616,9 @@ class CodesLayoutViewWidget(QWidget):
         self.status_bar.addPermanentWidget(self.sound_indicator)
         self.changeLayoutSignal.connect(self.changeLayout)
         self.setupLayout(layout)
-        self.setWindowFlags(Qt.WindowStaysOnTopHint)
+        self.setWindowTitle("摩斯码表")
+        self.setWindowIcon(QIcon(':/morse-writer.ico'))
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.adjustPosition()
         self.escapeMorseModeListener = KeyCombinationListener()
         logging.debug(f"[CodesLayoutViewWidget __init__]")
@@ -1703,10 +1701,10 @@ class CodesLayoutViewWidget(QWidget):
 
         if self.config['withsound']:
             self.sound_indicator.set_color("green")
-            self.status_bar.showMessage("Sound Mode Enabled")
+            self.status_bar.showMessage("提示音已开启")
         else:
             self.sound_indicator.set_color("red")
-            self.status_bar.showMessage("Sound Mode Disabled")
+            self.status_bar.showMessage("提示音已关闭")
 
         self.vlayout.addWidget(self.status_bar)
 
@@ -1724,7 +1722,8 @@ class CodesLayoutViewWidget(QWidget):
             item.reset()
 
     def closeEvent(self, event):
-        window.backToSettings()
+        event.ignore()
+        self.showMinimized()
 
     def keyPressEvent(self, event):
         escapeMorseMode = self.escapeMorseModeListener.keyPressEvent(event)
@@ -1747,7 +1746,36 @@ def get_keystroke_state(name):
     return state
 
 
+class ChineseUiTranslator(QTranslator):
+    # The bundled Qt Chinese catalog covers widget menus, but some versions
+    # lack QPlatformTheme's standard dialog button translations.
+    BUTTON_TEXT = {
+        'OK': '确定', 'Save': '保存', 'Save All': '全部保存', 'Open': '打开',
+        'Yes': '是', 'Yes to All': '全部是', 'No': '否', 'No to All': '全部否',
+        'Abort': '中止', 'Retry': '重试', 'Ignore': '忽略', 'Close': '关闭',
+        'Cancel': '取消', 'Discard': '放弃', 'Help': '帮助', 'Apply': '应用',
+        'Reset': '重置', 'Restore Defaults': '恢复默认',
+    }
+
+    def translate(self, context, source_text, disambiguation=None, n=-1):
+        if context in ('QPlatformTheme', 'QDialogButtonBox'):
+            label = self.BUTTON_TEXT.get(source_text.replace('&', ''))
+            if label is not None:
+                return label
+        return super().translate(context, source_text, disambiguation, n)
+
+
 class CustomApplication(QApplication):
+    def __init__(self, argv):
+        QLocale.setDefault(QLocale(QLocale.Chinese, QLocale.China))
+        super().__init__(argv)
+        self.setApplicationName("摩斯输入")
+        self.setQuitOnLastWindowClosed(False)
+        self.qt_translator = ChineseUiTranslator(self)
+        self.qt_translator.load("qt_zh_CN", QLibraryInfo.location(QLibraryInfo.TranslationsPath))
+        self.installTranslator(self.qt_translator)
+        apply_dark_theme(self)
+
     def notify(self, receiver, event):
         #logging.debug(f"Event: {event.type()}, Receiver: {receiver.__class__.__name__}")
         return super().notify(receiver, event)
@@ -1759,7 +1787,7 @@ if __name__ == '__main__':
     app = CustomApplication(sys.argv)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "MorseWriter", "I couldn't detect any system tray on this system.")
+        QMessageBox.critical(None, "摩斯输入", "未检测到系统托盘，无法启动程序。")
         sys.exit(1)
 
     QApplication.setQuitOnLastWindowClosed(False)
@@ -1770,6 +1798,7 @@ if __name__ == '__main__':
 
     # Create main window
     window = Window(layoutManager=layoutmanager, configManager=configmanager)
+    app.aboutToQuit.connect(window.stopIt)
 
     # Now that we have the window, initialize actions that may require window reference
     actions = configmanager.initActions(window)

@@ -31,19 +31,17 @@ pip install pyinstaller
 pyinstaller MorseCodeGUI.spec
 ```
 
-**Usage**
+**使用说明**
 
-*   [Download the MorseWriter Application and Code Chart from here](https://github.com/AceCentre/MorseWriter/releases/latest)
-*   Run the `MorseWriter-Installer.exe` 
-*   Select your options
-*   Note the two key option: the key on the left hand pull down menu relates to dit (*) and one on the right relates to dah (-)
-*   If you want to use a third key for the return character (removing the need for good timing) then you can do that with the third dropdown
-*   Press go
-*   Minimise the coding window if needed
-*   Minimise the black debug window. NB: If you close it you are closing the app. 
-* Only the input keys enabled for the selected One/Two/Three Key mode are reserved for Morse entry. Other keys, including the numeric keypad, remain available for normal typing.
-* Choose **OnOff** in the system tray menu to pause Morse entry and restore normal keyboard input; choose it again to resume. **Open Settings** stops Morse entry, and **Quit** closes the app.
-* With the coding window focused, **Ctrl+Shift+P** returns to settings.
+本分支使用简体中文界面和默认深色主题。
+
+* 选择单键、双键或三键模式，再点击“开始输入”。双键模式的第一个键输入点，第二个键输入划；三键模式额外使用第三个键结束当前字符。
+* 只有当前模式选定的输入键用于摩斯输入，其他按键和数字小键盘仍可正常使用。
+* 设置窗口和码表窗口点击 × 后最小化，正在进行的摩斯输入会继续运行。
+* 点击系统托盘图标或选择“显示窗口”可恢复窗口。
+* 托盘菜单中的“暂停输入”恢复普通键盘输入，“继续输入”重新启用摩斯输入。“打开设置”会停止输入并返回设置窗口。
+* 需要关闭程序时，在托盘菜单中选择“退出”，程序会释放键盘监听。
+* 码表窗口获得焦点时，Ctrl+Shift+P 可返回设置。
 
 **Tips for first use**
 

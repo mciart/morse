@@ -61,8 +61,8 @@
             { "code": "1212", "action": "ENTER" },
             { "code": "1122", "action": "SPACE" },
             { "code": "2222", "action": "BACKSPACE" },
-            { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "GOTO Main" },
-            { "code": "121121", "action": "REPEATMODE", "label": "REPEAT"}
+            { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "主键盘" },
+            { "code": "121121", "action": "REPEATMODE", "label": "重复"}
         ]
     },
     "main": {
@@ -151,10 +151,10 @@
         { "code": "21212", "action": "CTRL" },
         { "code": "112122", "action": "WINDOWS" },
         { "code": "112121", "action": "CAPSLOCK" },
-        { "code": "22121", "action": "CHANGELAYOUT", "target": "mouse", "label": "GOTO Mouse" },
-        { "code": "21112", "action": "CHANGELAYOUT", "target": "number", "label": "GOTO Number" },
-        { "code": "111211", "action": "CHANGELAYOUT", "target": "typing", "label": "GOTO Typing" },
-        { "code": "121121", "action": "REPEATMODE", "label": "REPEAT"},
+        { "code": "22121", "action": "CHANGELAYOUT", "target": "mouse", "label": "鼠标" },
+        { "code": "21112", "action": "CHANGELAYOUT", "target": "number", "label": "数字" },
+        { "code": "111211", "action": "CHANGELAYOUT", "target": "typing", "label": "字母" },
+        { "code": "121121", "action": "REPEATMODE", "label": "重复"},
         { "code": "121211", "action": "SOUND" },
         { "code": "22212", "action": "CODESET" },
         { "code": "112222", "action": "F1" },
@@ -206,8 +206,8 @@
         { "code": "2221", "action": "MOUSECLICKRIGHT" },
         { "code": "2222", "action": "MOUSEDBLCLICKRIGHT" },
         { "code": "11111", "action": "MOUSECLKHLDRIGHT" },
-        { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "GOTO Main" },
-        { "code": "121121", "action": "REPEATMODE", "label": "REPEAT"}
+        { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "主键盘" },
+        { "code": "121121", "action": "REPEATMODE", "label": "重复"}
       ]
     },
     "number": {
@@ -230,7 +230,7 @@
         { "code": "121", "action": "STAR" },
         { "code": "1212", "action": "ENTER" },
         { "code": "121212", "action": "DOT" },
-        { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "GOTO Main" }
+        { "code": "22121", "action": "CHANGELAYOUT", "target": "main", "label": "主键盘" }
       ]
     }
   },
