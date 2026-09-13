@@ -109,6 +109,29 @@ def verify_interface_features(window):
                 view.setCompactMode(True)
                 assert view.compactScale() == scale, 'Reopening compact mode lost its scale'
         metrics.update(resize_sizes=resize_sizes, reset_scale=view.compactScale(), scale_saved=True)
+        layer_geometry = QRect(view.geometry())
+        layer_handle = int(view.winId())
+        layer_config = Path(window.configManager.config_file).read_bytes()
+        assert window.config['pinyin_layer_enabled'] is True
+        assert window.config['pinyin_layer_key'] == 'F22'
+        assert window.config['pinyin_layer_mode'] == 'hold'
+        assert window.pinyinModeComboBox.findData('toggle') >= 0
+        view.setPinyinMode(True, window._pinyin_layout)
+        try:
+            assert view.isPinyinMode() and len(view.crs) == 116
+            for code, text in (('222', 'a'), ('1111', 'zh'), ('221', 'ang')):
+                assert view.crs[code].item['pinyin_text'] == text
+            assert view.keystroke_crs_map['ONE'].character.text() == '1'
+            image = QImage(view.size(), QImage.Format_ARGB32_Premultiplied)
+            image.fill(Qt.transparent)
+            view.render(image)
+            assert not view.isVisible(), 'Switching layer must preserve hidden state'
+            assert view.geometry() == layer_geometry and int(view.winId()) == layer_handle
+            assert Path(window.configManager.config_file).read_bytes() == layer_config
+            metrics['pinyin_layer'] = {'actions': len(view.crs), 'key': 'F22',
+                                       'modes': ['hold', 'toggle'], 'geometry_preserved': True}
+        finally:
+            view.setPinyinMode(False)
     finally:
         view.setCompactMode(False)
     assert view.geometry() == geometry, 'Full guide geometry was not restored'

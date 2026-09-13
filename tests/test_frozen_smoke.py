@@ -45,6 +45,7 @@ class FrozenInterfaceProbeTests(TestCase):
         preferences = dict(window.configManager.config)
         message = AssertionError('Probe must not activate a native integration')
         with patch.object(window.guide_hotkey, 'set_sequence', side_effect=message), \
+                patch.object(window.guide_key, 'set_key', side_effect=message), \
                 patch.object(window.startup_registration, 'set_enabled', side_effect=message), \
                 patch.object(ui.morse, 'show_guide_without_activation', side_effect=message), \
                 patch('virtual_keyboard.show_guide_without_activation', side_effect=message), \
@@ -52,6 +53,8 @@ class FrozenInterfaceProbeTests(TestCase):
                              return_value=ui.morse.QtCore.QRect(0, 0, 2200, 1400)):
             result = verify_interface_features(window)
         self.assertEqual(result['hotkey_preset'], 'F22')
+        self.assertEqual(result['pinyin_layer']['actions'], 116)
+        self.assertEqual(result['pinyin_layer']['modes'], ['hold', 'toggle'])
         self.assertTrue(result['transparent_gap'] and result['painted_key'] and result['restored'])
         self.assertTrue(result['scale_saved'])
         self.assertEqual(result['reset_scale'], 1.0)

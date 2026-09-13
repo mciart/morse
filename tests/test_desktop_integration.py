@@ -104,7 +104,8 @@ class DesktopIntegrationTests(TestCase):
         with patch.object(self.window.guide_hotkey, 'set_sequence') as register:
             self.window.startDesktopIntegration()
             self.window.hotkeyApplyButton.click()
-            register.assert_called_with('F22')
+            register.assert_called_with('')  # The same key belongs to the two-gesture listener.
+            self.assertIn('按住拼音／双击显隐', self.window.hotkeyStatus.text())
         self.assertEqual(self.window.configManager.config['guide_hotkey'], 'F22')
         selector.setCurrentIndex(selector.findData(None))
         self.assertFalse(self.window.hotkeyEdit.isHidden())
@@ -119,10 +120,44 @@ class DesktopIntegrationTests(TestCase):
         self.window.hotkeyApplyButton.click()
         self.assertIn('不能与摩斯输入键相同', self.window.hotkeyStatus.text())
         self.assertNotEqual(self.window.config.get('guide_hotkey'), 'F22')
+        self.window.hotkeyPresetComboBox.setCurrentIndex(selector.findData(None))
         self.window.hotkeyEdit.setKeySequence(morse.QKeySequence('Ctrl+F22'))
         self.window.hotkeyApplyButton.click()
         self.assertIn('不能与摩斯输入键相同', self.window.hotkeyStatus.text())
         self.assertNotEqual(self.window.config.get('guide_hotkey'), 'Ctrl+F22')
+
+    def test_pinyin_mode_and_key_are_configurable_and_persisted(self):
+        self.window.pinyinModeComboBox.setCurrentIndex(self.window.pinyinModeComboBox.findData('toggle'))
+        self.window.pinyinKeyComboBox.setCurrentIndex(self.window.pinyinKeyComboBox.findData('F21'))
+        with patch.object(self.window.guide_hotkey, 'set_sequence'):
+            self.window.startDesktopIntegration()
+            self.window.pinyinApplyButton.click()
+        self.layer_hook.assert_called_with('F21')
+        self.assertEqual(self.window.layer_gesture.mode, 'toggle')
+        self.assertEqual(self.window.configManager.config['pinyin_layer_key'], 'F21')
+        self.assertEqual(self.window.configManager.config['pinyin_layer_mode'], 'toggle')
+
+    def test_disabling_pinyin_restores_same_key_single_hotkey(self):
+        self.window.hotkeyPresetComboBox.setCurrentIndex(self.window.hotkeyPresetComboBox.findData('F22'))
+        with patch.object(self.window.guide_hotkey, 'set_sequence') as register:
+            self.window.startDesktopIntegration()
+            self.window.hotkeyApplyButton.click()
+            register.assert_called_with('')
+            self.window.pinyinLayerCheck.setChecked(False)
+            self.window.pinyinApplyButton.click()
+            register.assert_called_with('F22')
+        self.layer_hook.assert_called_with('')
+        self.assertEqual(self.window.config.get('guide_hotkey'), 'F22')
+
+    def test_invalid_saved_pinyin_binding_remains_visible_as_an_error(self):
+        self.window.config.update(pinyin_layer_key='F23', keyone='F23')
+        with patch.object(self.window.guide_hotkey, 'set_sequence'), \
+             patch.object(self.window.guide_key, 'set_key',
+                          side_effect=lambda key: self.window.pinyinKeyReady(key)):
+            self.window.startDesktopIntegration()
+        self.assertIn('冲突', self.window.pinyinKeyStatus.text())
+        self.assertFalse(self.window.guide_key_timer.isActive())
+        self.assertEqual(self.window.config['pinyin_layer_key'], 'F23')
 
     def test_guide_restore_uses_no_activation_helper(self):
         view, _listener = self.start_input()

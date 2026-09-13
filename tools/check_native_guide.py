@@ -8,6 +8,7 @@ test region. Exit codes: 0 passed, 1 failed, 2 unavailable desktop/platform.
 """
 
 import argparse
+from copy import deepcopy
 import ctypes
 from ctypes import wintypes
 import json
@@ -15,6 +16,7 @@ import os
 from pathlib import Path
 import sys
 import traceback
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKGROUND = (229, 16, 160)
@@ -72,6 +74,8 @@ def check_native(report, save_images=False):
     from PyQt5.QtWidgets import QApplication, QWidget
     from tools.generate_codechart import read_key_data
     from morse_profiles import normalize_layouts
+    from MorseCodeGUI import ConfigManager
+    from pinyin_codes import build_pinyin_layout
     from ui_theme import ThemeManager
     from virtual_keyboard import VirtualKeyboardView
     from windows_integration import show_guide_without_activation
@@ -245,7 +249,7 @@ def check_native(report, save_images=False):
             app.sendEvent(viewport, QMouseEvent(kind, QPointF(start + offset),
                           QPointF(global_start + offset), button, buttons, Qt.NoModifier))
 
-    def assert_text_and_board_fit():
+    def assert_text_and_board_fit(*, tight=True):
         labels = 0
         for cap in view.crs.values():
             if not cap.isVisibleTo(view.chart_widget):
@@ -258,9 +262,56 @@ def check_native(report, save_images=False):
                 labels += 1
         mapped = view.scroll_area.transform().mapRect(view.scroll_area.sceneRect())
         viewport = view.scroll_area.viewport().rect()
-        assert 0 <= viewport.width() - mapped.width() < 2, 'Compact board width detached from window'
-        assert 0 <= viewport.height() - mapped.height() < 2, 'Compact board height detached from window'
+        if tight:
+            assert 0 <= viewport.width() - mapped.width() < 2, 'Compact board width detached from window'
+            assert 0 <= viewport.height() - mapped.height() < 2, 'Compact board height detached from window'
+        else:
+            # Pinyin has another aspect ratio and must fit the existing English
+            # window, rather than resize that HWND every time the layer changes.
+            assert mapped.width() <= viewport.width() + 2, 'Layer board width exceeds viewport'
+            assert mapped.height() <= viewport.height() + 2, 'Layer board height exceeds viewport'
         return labels
+
+    def layer_state():
+        hwnd = int(view.effectiveWinId() or 0)
+        return dict(hwnd=hwnd, native_geometry=native_geometry() if hwnd else None,
+                    qt_geometry=view.geometry().getRect(), window_state=int(view.windowState()),
+                    visible=view.isVisible(), compact_scale=view.compactScale(),
+                    config=deepcopy(view.config))
+
+    def assert_layer_state(before, name):
+        after = layer_state()
+        for field, value in before.items():
+            assert after[field] == value, f'{name}: temporary layer changed {field}'
+        assert_foreground(name + ':invariants')
+        stages[-1]['layer_invariants'] = dict(same_hwnd=True, same_geometry=True,
+                                             same_visibility=True, same_config=True,
+                                             same_compact_scale=True)
+
+    def check_pinyin_layer(name, enabled, *, visible=True, minimized=False):
+        view.flushPosition()
+        before = layer_state()
+        view.setPinyinMode(enabled)
+        assert_foreground(name + ':immediate')
+        sample(name, visible=visible, minimized=minimized)
+        assert view.isPinyinMode() == enabled, 'Guide did not change to requested layer'
+        assert_layer_state(before, name)
+        stages[-1]['pinyin_layer'] = enabled
+        if visible and not minimized:
+            stages[-1]['labels_fitting'] = assert_text_and_board_fit(
+                tight=view.isCompactMode() and not enabled)
+        if enabled:
+            expected_labels = {action: str(number) for number, action in enumerate(
+                ('ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'))}
+            expected_labels['SOUND'] = '提示音'
+            for action, text in expected_labels.items():
+                cap = view.keystroke_crs_map[action]
+                assert cap.item.get('_action') is not None, f'{action}: unbound action in pinyin guide'
+                assert cap.character.text() == text, f'{action}: label differs from actual action'
+            stages[-1]['runtime_control_labels'] = expected_labels
+            if save_images and visible and not minimized:
+                directory = report.parent / (report.stem + '-images')
+                assert view.grab().save(str(directory / (name + '-guide.png')))
 
     def simulate_font_metrics(fonts, factor):
         # This alters only our labels, not Windows DPI or any other application.
@@ -317,8 +368,18 @@ def check_native(report, save_images=False):
         layouts = json.loads((ROOT / 'user_data/layouts.json').read_text(encoding='utf-8-sig'))['layouts']
         layout = normalize_layouts(layouts)['desktop']
         labels = read_key_data(ROOT / 'MorseCodeGUI.py')
+
+        def refuse_output(*_args, **_kwargs):
+            raise AssertionError('Native chart validation must not produce OS input')
+
+        # Bind the application's actual action classes and translated labels,
+        # without constructing its Window, reading configuration, or starting
+        # listeners/audio. The guide only calls getlabel on these objects.
+        action_context = SimpleNamespace(enableRepeatMode=refuse_output, toggleSound=refuse_output)
+        factories = ConfigManager.initActions(SimpleNamespace(key_data=labels), action_context)
         for item in layout['items']:
-            item['label'] = item.get('label', labels.get(item['action'], {}).get('label', item['action']))
+            item['_action'] = factories[item['action']](item)
+        pinyin_layout = build_pinyin_layout(layout)
         view = VirtualKeyboardView(layout, dict(show_mouse=False, guide_auto_fit=True, upperchars=True))
         view.resize(min(900, backdrop.width() - 100), min(600, backdrop.height() - 100))
         view.move(backdrop.pos() + QPoint(35, 35))
@@ -326,6 +387,20 @@ def check_native(report, save_images=False):
         sample('full')
         original_size = view.size()
         saved_positions = {False: native_position()}
+        english_caps, english_board = view.crs, view.chart_widget
+        view.flushPosition()
+        before_prewarm = layer_state()
+        view.setPinyinMode(False, pinyin_layout)
+        sample('pinyin-prewarmed')
+        assert_layer_state(before_prewarm, 'pinyin-prewarmed')
+        assert not view.isPinyinMode(), 'Prewarming enabled the temporary layer'
+        assert view.crs is english_caps and len(view.crs) == 130, 'Prewarming replaced English actions'
+        assert view.chart_widget is english_board, 'Prewarming changed the current board'
+        assert len(view.scroll_area._boards) == 2, 'Pinyin proxy was not prepared before input'
+        stages[-1]['english_actions_preserved'] = 130
+        check_pinyin_layer('full-pinyin', True)
+        check_pinyin_layer('full-pinyin-restored', False)
+        assert view.crs is english_caps, 'English caps were rebuilt after pinyin'
         key = next(iter(view.crs.values()))
         result['display_environment'] = dict(
             automatic_high_dpi_scaling=app.testAttribute(Qt.AA_EnableHighDpiScaling),
@@ -342,6 +417,9 @@ def check_native(report, save_images=False):
         assert view.isCompactMode()
         sample('top-checkbox-compact')
         saved_positions[True] = native_position()
+        check_pinyin_layer('compact-pinyin', True)
+        assert all(label.isHidden() for label in view._annotations), 'Compact pinyin has text outside keys'
+        check_pinyin_layer('compact-pinyin-restored', False)
         check_menus()
         maximum = min(1.15, (backdrop.width() - 150) / view.scroll_area.sceneRect().width(),
                       (backdrop.height() - 150) / view.scroll_area.sceneRect().height())
@@ -349,6 +427,8 @@ def check_native(report, save_images=False):
         assert maximum > minimum, 'Desktop cannot exercise resizing at readable scale'
         view.setCompactScale(maximum)
         sample('larger')
+        check_pinyin_layer('resized-pinyin', True)
+        check_pinyin_layer('resized-pinyin-restored', False)
         large_size = view.size()
         view.setCompactScale(minimum)
         assert view.width() < large_size.width()
@@ -404,6 +484,8 @@ def check_native(report, save_images=False):
         view.hide()
         view.setCompactMode(True)
         sample('hidden-mode-change', visible=False)
+        check_pinyin_layer('hidden-pinyin', True, visible=False)
+        check_pinyin_layer('hidden-pinyin-restored', False, visible=False)
         show_guide_without_activation(view)
         sample('hidden-restored')
         # Establish the minimized scenario using the application's explicit
@@ -419,6 +501,8 @@ def check_native(report, save_images=False):
         view.setCompactMode(False)
         assert_foreground('minimized-mode-change:immediate')
         sample('minimized-mode-change', minimized=True)
+        check_pinyin_layer('minimized-pinyin', True, minimized=True)
+        check_pinyin_layer('minimized-pinyin-restored', False, minimized=True)
         show_guide_without_activation(view)
         sample('minimized-restored')
 
@@ -461,7 +545,7 @@ def check_native(report, save_images=False):
         if foreground_baseline:
             result['owned_foreground_test'] = dict(status='passed',
                 baseline=foreground_identity(foreground_baseline),
-                tested='show, click, drag, resize, menus and recreated HWNDs; no global input')
+                tested='show, click, drag, resize, menus, pinyin layers and recreated HWNDs; no global input')
         result['status'] = 'passed'
     except NativeDesktopUnavailable as error:
         result.update(status='unavailable', skipped=True, reason=str(error))

@@ -21,6 +21,8 @@ class KeyerIntegrationTests(unittest.TestCase):
         mapping.MappingActionTests.setUp(self)
         self.window.engine_timer.stop()
         self.now = time.monotonic() + .1
+        self.clock_now = self.now
+        self.enterContext(patch('time.monotonic', side_effect=lambda: self.clock_now))
         self.window.audio.configure(enabled=True)
 
     def engine(self, count, mode='manual'):
@@ -28,10 +30,12 @@ class KeyerIntegrationTests(unittest.TestCase):
                                              wpm=15, minLetterPause=0, maxDitTime=0))
 
     def key(self, role, down, offset):
+        self.clock_now = self.now + offset
         self.window.listenerThread._emit_key(
             ('f23', 'mouse:x2', 'right ctrl')[role], down, role, self.now + offset)
 
     def tick(self, offset):
+        self.clock_now = self.now + offset
         self.window.processEngineEvents(self.window.engine.tick(self.now + offset))
 
     def test_overlapping_buttons_reach_output_and_share_audio_visual_timing(self):

@@ -238,7 +238,8 @@ class KeyCap(QFrame):
     def updateView(self):
         label = self.label_override if self.label_override is not None else self.item_label()
         self.is_enabled = self._prefix_matches and self.is_available
-        if (self.config.get('upperchars', False) and self.item.get('action') in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        if (not self.item.get('pinyin_text') and self.config.get('upperchars', False)
+              and self.item.get('action') in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
               and len(self.item.get('action', '')) == 1 and len(label) == 1 and label in 'abcdefghijklmnopqrstuvwxyz'):
             label = label.upper()
         self._refreshAppearance()
@@ -248,7 +249,7 @@ class KeyCap(QFrame):
         self.character.setText(label)
         tooltip_label = (self.label_override if self.label_override is not None and not self.item['action'].startswith('MOUSE')
                          else self.item_label())
-        self.setToolTip(tooltip_label + '\n' + self.code)
+        self.setToolTip(str(self.item.get('tooltip') or tooltip_label) + '\n' + self.code)
         self.refreshMetrics()
 
     def refreshMetrics(self):
@@ -362,27 +363,44 @@ class GuideViewport(QGraphicsView):
         self.auto_fit = True
         self.compact = False
         self.proxy = None
+        self._boards = {}
 
     def setBoard(self, board):
+        """Switch between cached surfaces without reparenting embedded widgets."""
+        self.prepareBoard(board)
+        for widget, proxy in self._boards.items():
+            proxy.setVisible(widget is board)
         self.board = board
-        self.proxy = self.scene().addWidget(board)
+        self.proxy = self._boards[board]
         self.refreshLayout()
+
+    def prepareBoard(self, board):
+        """Own and measure a hidden surface before an input gesture needs it."""
+        if board not in self._boards:
+            self._boards[board] = self.scene().addWidget(board)
+            self._boards[board].setVisible(False)
+            self.boardBounds(board)
+
+    def boardBounds(self, board):
+        """Measure even an inactive layer without changing the active scene."""
+        proxy = self._boards[board]
+        board.ensurePolished()
+        board.layout().invalidate()
+        board.layout().activate()
+        size = board.layout().sizeHint().expandedTo(board.layout().minimumSize())
+        board.resize(size)
+        board.layout().activate()
+        # The proxy can initially clamp the board to its previous minimum.
+        # Once the new child constraints are active, shrink both together.
+        size = board.layout().sizeHint().expandedTo(board.layout().minimumSize())
+        proxy.resize(size.width(), size.height())
+        board.layout().activate()
+        return proxy.boundingRect()
 
     def refreshLayout(self):
         if self.proxy is None:
             return
-        self.board.ensurePolished()
-        self.board.layout().invalidate()
-        self.board.layout().activate()
-        size = self.board.layout().sizeHint().expandedTo(self.board.layout().minimumSize())
-        self.board.resize(size)
-        self.board.layout().activate()
-        # The proxy can initially clamp the board to its previous minimum.
-        # Once the new child constraints are active, shrink both together.
-        size = self.board.layout().sizeHint().expandedTo(self.board.layout().minimumSize())
-        self.proxy.resize(size.width(), size.height())
-        self.board.layout().activate()
-        self.setSceneRect(self.proxy.boundingRect())
+        self.setSceneRect(self.boardBounds(self.board))
         self._fitBoard()
 
     def setAutoFit(self, value):
@@ -449,6 +467,8 @@ class VirtualKeyboardView(QWidget):
         self._held = ()
         self._locked = False
         self._prefix = ''
+        self._pinyin_mode = False
+        self._boards = {}
         self._section_titles = []
         self._mouse_visible = bool(config.get('show_mouse', False))
         self._auto_fit = bool(config.get('guide_auto_fit', True))
@@ -486,6 +506,7 @@ class VirtualKeyboardView(QWidget):
         self.setFocusPolicy(Qt.NoFocus)
         self.setMinimumSize(360, 280)
         self._build()
+        self._boards['english'] = self._boardState()
         self.updateTheme()
         available = QApplication.desktop().availableGeometry()
         self.resize(min(1280, available.width() - 32), min(780, available.height() - 64))
@@ -654,7 +675,7 @@ class VirtualKeyboardView(QWidget):
         self._screen_refreshing = True
         self._screen_dirty = False
         try:
-            for cap in self.crs.values():
+            for cap in self._allCaps():
                 cap.refreshMetrics()
             self.scroll_area.refreshLayout()
             if self._compact_mode:
@@ -748,6 +769,127 @@ class VirtualKeyboardView(QWidget):
             if cap is not None:
                 row.addWidget(cap, width)
         return row
+
+    _BOARD_ATTRIBUTES = ('layout', '_items', '_by_action', 'crs', 'keystroke_crs_map',
+                         'chart_widget', 'mouse_panel', 'mouse_shell', '_section_titles',
+                         '_annotations', '_annotation_visibility')
+
+    def _boardState(self):
+        return {name: getattr(self, name) for name in self._BOARD_ATTRIBUTES}
+
+    def _useBoardState(self, state):
+        for name, value in state.items():
+            setattr(self, name, value)
+
+    def _boardStates(self):
+        return list(self._boards.values()) or [self._boardState()]
+
+    def _allCaps(self):
+        return (cap for state in self._boardStates() for cap in state['crs'].values())
+
+    def _createPinyinBoard(self, layout):
+        self.layout = layout
+        self._items = [item for item in layout['items'] if not item.get('emptyspace')]
+        self._by_action = {}
+        for item in self._items:
+            self._by_action.setdefault(item['action'], []).append(item)
+        self.crs, self.keystroke_crs_map = {}, {}
+        self._section_titles = []
+        self.chart_widget = QWidget()
+        self.chart_widget.setObjectName('guideBoard')
+        body = QHBoxLayout(self.chart_widget)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(16)
+        keyboard = QVBoxLayout()
+        keyboard.setSpacing(6)
+        sounds = QHBoxLayout()
+        sounds.setSpacing(16)
+        for group, title, columns in (('initial', '声母', 5), ('final', '韵母', 7)):
+            section = QVBoxLayout()
+            section.setSpacing(5)
+            section.addWidget(self._title(title))
+            grid = QGridLayout()
+            grid.setSpacing(5)
+            items = [item for item in self._items if item.get('pinyin_group') == group]
+            for index, item in enumerate(items):
+                cap = self._cap(item['action'], item=item)
+                grid.addWidget(cap, index // columns, index % columns)
+            section.addLayout(grid)
+            section.addStretch()
+            sounds.addLayout(section, columns)
+        keyboard.addLayout(sounds)
+        keyboard.addWidget(self._title('选字与编辑'))
+        controls = QGridLayout()
+        controls.setSpacing(5)
+        items = [item for item in self._items if item.get('pinyin_group') == 'control']
+        for index, item in enumerate(items):
+            controls.addWidget(self._cap(item['action'], compact=True, item=item), index // 9, index % 9)
+        keyboard.addLayout(controls)
+        keyboard.addStretch()
+        body.addLayout(keyboard, 3)
+        self.mouse_panel = QWidget()
+        self.mouse_panel.setLayout(self._mouse_panel())
+        self.mouse_panel.layout().setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self.mouse_panel, 1)
+        self.mouse_panel.setVisible(self._mouse_visible)
+        self._annotations = [label for label in self.chart_widget.findChildren(QLabel)
+                             if not isinstance(label, KeyLabel)]
+        self._annotation_visibility = {}
+        state = self._boardState()
+        self._boards['pinyin'] = state
+        self._setBoardCompact(state, self._compact_mode)
+
+    def isPinyinMode(self):
+        return self._pinyin_mode
+
+    def setPinyinMode(self, enabled, layout=None):
+        """Change only the temporary surface; never resize or activate the guide."""
+        enabled = bool(enabled)
+        if (enabled or layout is not None) and 'pinyin' not in self._boards:
+            if layout is None:
+                raise ValueError('首次启用拼音码表时需要映射表。')
+            previous = self._boards['english']
+            try:
+                self._createPinyinBoard(layout)
+            finally:
+                self._useBoardState(previous)
+            board = self._boards['pinyin']['chart_widget']
+            board.setStyleSheet(self._boardStyle())
+            self.scroll_area.prepareBoard(board)
+        if enabled == self._pinyin_mode:
+            return
+        self._pinyin_mode = enabled
+        self._useBoardState(self._boards['pinyin' if enabled else 'english'])
+        # Both proxies remain owned by the same scene. A held layer key must
+        # never repeat the HWND/geometry changes needed by compact mode.
+        self.scroll_area.setBoard(self.chart_widget)
+        self.chart_widget.setStyleSheet(self._boardStyle())
+        self.scroll_area.setAutoFit(enabled or self._compact_mode or self._auto_fit)
+        self.heading.setText('拼音输入' if enabled else '键盘与鼠标')
+        self.subtitle.setText('左侧声母、右侧韵母；拼音由当前系统输入法选字。' if enabled else
+                              '照着键位输入摩斯码，匹配的按键会自动亮起。')
+        for cap in self.crs.values():
+            cap.reset()
+            for symbol in self._prefix:
+                cap.Dit() if symbol == '1' else cap.Dah()
+        self.setOutputState(self._held, self._locked)
+        self.scroll_area._fitBoard()
+
+    def _setBoardCompact(self, state, value):
+        state['mouse_shell'].setProperty('compactOverlay', value)
+        if value:
+            state['_annotation_visibility'] = {
+                label: not label.isHidden() for label in state['_annotations']}
+        for label, was_shown in state['_annotation_visibility'].items():
+            label.setVisible(was_shown and not value)
+        if state['chart_widget'] is self.chart_widget:
+            self._annotation_visibility = state['_annotation_visibility']
+
+    def _compactBoardBounds(self):
+        # One physical overlay rectangle for both layers, including when DPI,
+        # mouse visibility, or a user resize changes its natural dimensions.
+        board = self._boards.get('english', {}).get('chart_widget', self.chart_widget)
+        return self.scroll_area.boardBounds(board)
 
     def _build(self):
         outer = QVBoxLayout(self)
@@ -1025,12 +1167,9 @@ class VirtualKeyboardView(QWidget):
         self.outer_layout.setContentsMargins(0, 0, 0, 0) if value else self.outer_layout.setContentsMargins(16, 12, 16, 8)
         self.outer_layout.setSpacing(0 if value else 10)
         self.scroll_area.compact = value
-        self.scroll_area.setAutoFit(value or self._auto_fit)
-        self.mouse_shell.setProperty('compactOverlay', value)
-        if value:
-            self._annotation_visibility = {label: not label.isHidden() for label in self._annotations}
-        for label, was_shown in self._annotation_visibility.items():
-            label.setVisible(was_shown and not value)
+        self.scroll_area.setAutoFit(value or self._auto_fit or self._pinyin_mode)
+        for state in self._boardStates():
+            self._setBoardCompact(state, value)
         self.scroll_area.viewport().setCursor(Qt.SizeAllCursor if value else Qt.ArrowCursor)
         self.updateTheme()
         if not was_minimized:
@@ -1053,7 +1192,7 @@ class VirtualKeyboardView(QWidget):
         return self._compact_scale
 
     def _minimumCompactScale(self):
-        heights = [label.fontMetrics().height() for cap in self.crs.values()
+        heights = [label.fontMetrics().height() for cap in self._allCaps()
                    for label in (cap.character, cap.codeline)]
         return min(1.0, 9.0 / max(1, min(heights, default=9)))
 
@@ -1103,7 +1242,7 @@ class VirtualKeyboardView(QWidget):
             width_delta = width_from_height
         elif edges & (Qt.TopEdge | Qt.BottomEdge) and abs(width_from_height) > abs(width_delta):
             width_delta = width_from_height
-        bounds = self.scroll_area.sceneRect()
+        bounds = self._compactBoardBounds()
         scale = max(0.001, (origin.width() + width_delta) / max(1, bounds.width()))
         self.setCompactScale(scale, persist=False)
         x = origin.right() + 1 - self.width() if edges & Qt.LeftEdge else origin.x()
@@ -1115,7 +1254,7 @@ class VirtualKeyboardView(QWidget):
         if not self._compact_mode:
             return
         self.scroll_area.refreshLayout()
-        bounds = self.scroll_area.sceneRect()
+        bounds = self._compactBoardBounds()
         available = self._availableGeometry() if available is None else available
         # Crop the currently rendered keys rather than enlarging them when the
         # surrounding controls disappear. Optional mouse keys may only reduce
@@ -1218,7 +1357,8 @@ class VirtualKeyboardView(QWidget):
         self.mouse_checkbox.blockSignals(True)
         self.mouse_checkbox.setChecked(value)
         self.mouse_checkbox.blockSignals(False)
-        self.mouse_panel.setVisible(value)
+        for state in self._boardStates():
+            state['mouse_panel'].setVisible(value)
         self.scroll_area.refreshLayout()
         self._fitCompactWindow()
         if changed:
@@ -1232,7 +1372,7 @@ class VirtualKeyboardView(QWidget):
         self.auto_fit_checkbox.blockSignals(True)
         self.auto_fit_checkbox.setChecked(value)
         self.auto_fit_checkbox.blockSignals(False)
-        self.scroll_area.setAutoFit(value or self._compact_mode)
+        self.scroll_area.setAutoFit(value or self._compact_mode or self._pinyin_mode)
         if changed:
             self.autoFitChanged.emit(value)
 
@@ -1299,14 +1439,20 @@ class VirtualKeyboardView(QWidget):
         self.scroll_area.viewport().setAutoFillBackground(not self._compact_mode)
         self.scroll_area.viewport().setStyleSheet('background: %s;' % background)
         self.input_feedback.updateTheme()
-        self.chart_widget.setStyleSheet(
-            'QWidget#guideBoard { background: %s; } QLabel#guideHint { color: %s; }'
-            % (background, colors['muted']))
-        for cap in self.crs.values():
+        for state in self._boardStates():
+            state['chart_widget'].setStyleSheet(self._boardStyle())
+        for cap in self._allCaps():
             cap.updateView()
         self.scroll_area.refreshLayout()
         self._fitCompactWindow()
         self.update()
+
+    def _boardStyle(self):
+        colors = THEME_COLORS
+        background = 'transparent' if self._compact_mode else colors['background']
+        return (
+            'QWidget#guideBoard { background: %s; } QLabel#guideHint { color: %s; }'
+            % (background, colors['muted']))
 
     def closeEvent(self, event):
         event.ignore()

@@ -2,6 +2,8 @@
 
 <!-- 由 tools/generate_codechart.py 自动生成，请勿手动修改表格。 -->
 
+启用拼音层输入时，请使用[拼音层码表](docs/pinyin-code-chart.md)。
+
 编码来自 [软件编码方案](morse_profiles.py) 与 [原始码表配置](user_data/layouts.json)，动作名称来自 [软件动作定义](MorseCodeGUI.py)。此表与软件使用同一个转换函数。
 
 `•` 表示点，`—` 表示划。统一码表采用国际摩斯优先规则：已有国际定义的字符优先采用 [ITU-R M.1677-1](https://www.itu.int/dms_pubrec/itu-r/rec/m/R-REC-M.1677-1-200910-I!!PDF-E.pdf)的编码，常见标点扩展采用通用约定。包含 A–Z、0–9 和 18 个标点，其中 53 个字符与 [Morsey 的实际编码表](https://github.com/dj-on-github/morsey/blob/dc120423abd6f211548ad5f60eba2f496fa680bf/lib/morsey/morse_code.dart#L7)一致，并补齐该表没有的美元符号 `$`（`•••—••—`）。参考版本固定，不会随对方项目更新而自动改变。`!`、`&`、`;`、`_`、`$` 属于常见字符扩展，不冒充 ITU 正式定义；18 个标点与[中文维基百科的标点表](https://zh.wikipedia.org/zh-cn/摩尔斯电码#标点符号)一致。

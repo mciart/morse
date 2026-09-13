@@ -122,6 +122,15 @@ class KeyboardOutput:
             for key in modifiers:
                 self.backend.press(key)
 
+    def send_pinyin(self, text):
+        """Send Latin key strokes through the target IME, not Unicode text."""
+        if not isinstance(text, str) or not text or any(character not in 'abcdefghijklmnopqrstuvwxyz' for character in text):
+            raise ValueError('拼音输出必须是小写英文字母')
+        self.reset()
+        for character in text:
+            self._send_key([character])
+        return text
+
     def send(self, key, character=None, modifier=False) -> str | None:
         """Send an action, consuming one-shot modifiers after a normal key.
 

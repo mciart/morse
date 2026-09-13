@@ -17,7 +17,9 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-码表由 `user_data/layouts.json` 的统一布局、`morse_profiles.py` 的标准化处理和 `MorseCodeGUI.py` 的动作定义共同生成，与运行时使用相同处理。只有统一的 `desktop` 页；旧用户布局在内存中迁移，不覆盖原文件。修改映射后先执行 `tools/generate_codechart.py`，再检查生成结果。测试使用模拟键鼠和音频，不能替代实际设备延迟或游戏兼容性验证。
+英文码表由 `user_data/layouts.json` 的统一布局、`morse_profiles.py` 的标准化处理和 `MorseCodeGUI.py` 的动作定义共同生成。拼音码表直接使用运行时的 `pinyin_codes.build_pinyin_layout`，声母、韵母及控制码保持同源。保存的基础布局仍只有 `desktop`；拼音层在内存中派生，旧用户布局也在内存中迁移，不覆盖原文件。
+
+修改映射后先执行 `tools/generate_codechart.py`，再用 `--check` 同时检查 `codechart.md` 与 `docs/pinyin-code-chart.md`。`guide_gesture.py` 负责按住／单击切层和双击显隐，`KeyboardOutput.send_pinyin` 输出逐个拉丁按键以进入目标拼音输入法。测试使用模拟键鼠和音频，不能替代实际输入法、设备延迟或游戏兼容性验证。
 
 在 Windows 桌面上额外检查精简码表的真实显示与缩放：
 

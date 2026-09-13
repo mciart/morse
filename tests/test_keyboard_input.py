@@ -151,10 +151,12 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             currentCharacter=[1, 2], repeaton=True, showNormal=Mock(),
             onOffAction=Mock(), updateTrayInputState=Mock(), goForIt=Mock(),
             key_output=Mock(), updateOutputState=Mock(),
+            resetPinyinLayer=Mock(), layer_gesture=morse.HoldTapGesture(),
+            processGestureEvents=Mock(),
             get_configured_keys=Mock(return_value=["space"]),
             on_press=Mock(), on_release=Mock(),
         )
-        for name in ("stopKeyListener", "startKeyListener", "stopIt", "handle_key_event", "resetOutput"):
+        for name in ("stopKeyListener", "startKeyListener", "stopIt", "handle_key_event", "processMorseKey", "resetOutput"):
             setattr(window, name, MethodType(getattr(morse.Window, name), window))
         return window
 

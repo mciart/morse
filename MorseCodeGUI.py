@@ -23,6 +23,8 @@ from keyboard_output import KeyboardOutput
 from virtual_keyboard import VirtualKeyboardView
 from morse_engine import MorseEngine
 from input_listener import KeyListenerThread
+from guide_gesture import GuideKeyListener, HoldTapGesture, normalize_guide_key
+from pinyin_codes import build_pinyin_layout
 from tone_audio import ToneAudio
 from windows_integration import (StartupRegistration, GlobalHotkey, parse_hotkey,
                                  DEFAULT_GLOBAL_HOTKEY, show_guide_without_activation)
@@ -61,6 +63,9 @@ DEFAULT_CONFIG = {
   "upperchars": True,
   "autostart": False,
   "guide_hotkey": DEFAULT_GLOBAL_HOTKEY,
+  "pinyin_layer_enabled": True,
+  "pinyin_layer_key": "F22",
+  "pinyin_layer_mode": "hold",
   "winxaxis": "left",
   "winyaxis": "top",
   "winposx": 10,
@@ -541,6 +546,21 @@ class Window(QDialog):
         self.guide_hotkey.activated.connect(self.toggleGuideVisibility)
         self.guide_hotkey.error.connect(self.hotkeyError)
         self.guide_hotkey.ready.connect(self.hotkeyReady)
+        self.guide_key = GuideKeyListener(self, clock=lambda: time.monotonic())
+        self.guide_key.available.connect(self.drainInput)
+        self.guide_key.ready.connect(self.pinyinKeyReady)
+        self.guide_key.error.connect(self.pinyinKeyError)
+        mode = self.config.get('pinyin_layer_mode', 'hold')
+        self.layer_gesture = HoldTapGesture(mode=mode if mode in ('hold', 'toggle') else 'hold')
+        self._sequence_pinyin = None
+        self._pinyin_layer = False
+        self._layer_blocked = False
+        self._pending_input = []
+        self._draining_input = False
+        self._pinyin_layout = None
+        self.guide_key_timer = QTimer(self)
+        self.guide_key_timer.setInterval(10)
+        self.guide_key_timer.timeout.connect(self.drainInput)
         self.engine = MorseEngine(self.config)
         self.engine_timer = QTimer(self)
         self.engine_timer.setTimerType(Qt.PreciseTimer)
@@ -572,6 +592,7 @@ class Window(QDialog):
         self.resetOutput()
         self.currentCharacter = []
         self.repeaton = False
+        self.resetPinyinLayer()
         self.showCodeView()
 
     def postInit(self):
@@ -642,6 +663,7 @@ class Window(QDialog):
         key_codes = self.get_configured_keys()
         logging.debug(f"[Window startKeyListener] Configured keys: {key_codes}")
         if not self.listenerThread:
+            self.resetPinyinLayer()
             self.audio.prepare()
             self.input_started_at = time.monotonic()
             self.listenerThread = KeyListenerThread(configured_keys=key_codes)
@@ -694,6 +716,8 @@ class Window(QDialog):
         # stopIt() explicitly hides and deletes the guide.
         view.setWindowIcon(self.windowIcon())
         self.codeslayoutview = view
+        self._pinyin_layout = build_pinyin_layout(self.layoutManager.get_active_layout())
+        view.setPinyinMode(False, self._pinyin_layout)
         view.settingsRequested.connect(self.backToSettings)
         view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
         view.autoFitChanged.connect(self.changeGuideAutoFit)
@@ -787,6 +811,9 @@ class Window(QDialog):
             'fontsizescale': self.fontSizeScaleEdit.value(),
             'autostart': self.autostartCheckbox.isChecked(),
             'guide_hotkey': self.selectedGuideHotkey(),
+            'pinyin_layer_enabled': self.pinyinLayerCheck.isChecked(),
+            'pinyin_layer_key': self.selectedPinyinKey(),
+            'pinyin_layer_mode': self.pinyinModeComboBox.currentData(),
             'fastMorseMode': self.fastMorseModeCheckbox.isChecked() if self.keySelectionRadioOneKey.isChecked() is False else False,
         }
         return config
@@ -804,8 +831,8 @@ class Window(QDialog):
 
         try:
             self.config = self.collect_config()
-        except (ValueError, TypeError):
-            QMessageBox.warning(self, '设置无效', '请检查输入及声音设置。')
+        except (ValueError, TypeError) as error:
+            QMessageBox.warning(self, '设置无效', str(error) or '请检查输入及声音设置。')
             return
         self.hide()
         self.init()
@@ -832,7 +859,8 @@ class Window(QDialog):
         if self._shutting_down:
             return
         self._shutting_down = True
-        for cleanup in (self.guide_hotkey.stop, self.stopIt, self.resetOutput, self.audio.shutdown):
+        for cleanup in (self.guide_key_timer.stop, self.guide_key.stop,
+                        self.guide_hotkey.stop, self.stopIt, self.resetOutput, self.audio.shutdown):
             try:
                 cleanup()
             except Exception:
@@ -877,6 +905,85 @@ class Window(QDialog):
     def startDesktopIntegration(self):
         self._desktop_integration_started = True
         self.applyGuideHotkey()
+
+    def selectedPinyinKey(self):
+        key = normalize_guide_key(self.pinyinKeyComboBox.currentData())
+        if self.pinyinLayerCheck.isChecked():
+            count = (1 if self.keySelectionRadioOneKey.isChecked() else
+                     2 if self.keySelectionRadioTwoKey.isChecked() else 3)
+            inputs = [box.currentData() for box in (self.iconComboBoxKeyOne,
+                      self.iconComboBoxKeyTwo, self.iconComboBoxKeyThree)[:count]]
+            if self.listenerThread is not None:
+                inputs += [self.config.get(name) for name in
+                           ('keyone', 'keytwo', 'keythree')[:int(self.config.get('keylen', 1))]]
+            self.validateGuideHotkey(key, inputs)
+        return key
+
+    def savePinyinKey(self):
+        try:
+            key = self.selectedPinyinKey()
+        except ValueError as error:
+            self.pinyinKeyError(str(error))
+            return
+        values = dict(pinyin_layer_enabled=self.pinyinLayerCheck.isChecked(), pinyin_layer_key=key,
+                      pinyin_layer_mode=self.pinyinModeComboBox.currentData())
+        self.config.update(values)
+        self.configManager.config.update(values)
+        self.configManager.save_config(self.configManager.config)
+        self.applyGuideHotkey()
+
+    def pinyinKeyReady(self, key):
+        if hasattr(self, 'pinyinKeyStatus'):
+            self.pinyinKeyStatus.setText(
+                (f'{key}：' + ('单击切换拼音／英文' if self.config.get('pinyin_layer_mode') == 'toggle'
+                              else '按住输入拼音') + '，双击显示／隐藏码表。')
+                if key else '拼音层按键已关闭。')
+
+    def pinyinKeyError(self, message):
+        logging.warning('Pinyin layer key: %s', message)
+        self.resetPinyinLayer()
+        if hasattr(self, 'pinyinKeyStatus'):
+            self.pinyinKeyStatus.setText(message)
+
+    def resetPinyinLayer(self):
+        if not hasattr(self, 'layer_gesture'):
+            return
+        self._layer_blocked = self._layer_blocked or self.layer_gesture.held
+        self.layer_gesture.reset()
+        self._sequence_pinyin = None
+        self._pending_input = []
+        self.setPinyinLayer(False)
+
+    def setPinyinLayer(self, enabled):
+        enabled = bool(enabled and self.listenerThread is not None
+                       and not self.config.get('off', False))
+        changed = enabled != self._pinyin_layer
+        self._pinyin_layer = enabled
+        if changed and enabled:
+            self.resetOutput()
+            self.repeaton = False
+        view = self.codeslayoutview
+        if view is not None and hasattr(view, 'setPinyinMode'):
+            view.setPinyinMode(enabled, self._pinyin_layout)
+            view.reset()
+            if self._sequence_pinyin == enabled:
+                for symbol in self.currentCharacter:
+                    view.Dit() if symbol == 1 else view.Dah()
+            self.updateOutputState()
+
+    def processGuideKey(self, pressed, timestamp):
+        if self._layer_blocked:
+            if not pressed:
+                self._layer_blocked = False
+            return
+        self.processGestureEvents(self.layer_gesture.key(pressed, timestamp))
+
+    def processGestureEvents(self, events):
+        for kind, value in events or ():
+            if kind in ('held', 'layer'):
+                self.setPinyinLayer(value)
+            elif kind == 'toggle':
+                self.toggleGuideVisibility()
 
     def selectedGuideHotkey(self):
         if not self.hotkeyEnabledCheck.isChecked():
@@ -931,6 +1038,32 @@ class Window(QDialog):
 
     def applyGuideHotkey(self):
         if self._desktop_integration_started:
+            mode = self.config.get('pinyin_layer_mode', 'hold')
+            if mode not in ('hold', 'toggle'):
+                mode = 'hold'
+            if mode != self.layer_gesture.mode:
+                self.resetPinyinLayer()
+                self.layer_gesture = HoldTapGesture(mode=mode)
+            layer_key = self.config.get('pinyin_layer_key', 'F22') if self.config.get('pinyin_layer_enabled', True) else ''
+            layer_error = None
+            inputs = [self.config.get(name) for name in
+                      ('keyone', 'keytwo', 'keythree')[:int(self.config.get('keylen', 1))]]
+            if layer_key:
+                try:
+                    layer_key = normalize_guide_key(layer_key)
+                    self.validateGuideHotkey(layer_key, inputs)
+                except ValueError:
+                    layer_error = '拼音层按键无效或与摩斯输入键冲突，请重新选择。'
+                    layer_key = ''
+            if layer_key != self.guide_key.key:
+                self.resetPinyinLayer()
+                # Retired hooks consume their own UP without re-enqueuing it.
+                # A newly bound key must therefore start unblocked.
+                self._layer_blocked = False
+            self.guide_key.set_key(layer_key)
+            self.guide_key_timer.start() if layer_key else self.guide_key_timer.stop()
+            if layer_error:
+                self.pinyinKeyError(layer_error)
             sequence = self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)
             if sequence:
                 inputs = [self.config.get(name) for name in
@@ -939,6 +1072,13 @@ class Window(QDialog):
                     self.validateGuideHotkey(sequence, inputs)
                 except ValueError as error:
                     self.hotkeyError(str(error))
+                    return
+                if layer_key and parse_hotkey(sequence)[2] == parse_hotkey(layer_key)[2]:
+                    # One owned press/release hook handles this trigger; an
+                    # additional WM_HOTKEY must not fire on its first press.
+                    self.guide_hotkey.set_sequence('')
+                    action = '切换拼音' if mode == 'toggle' else '按住拼音'
+                    self.hotkeyStatus.setText(layer_key + ' 已使用' + action + '／双击显隐。')
                     return
             self.guide_hotkey.set_sequence(sequence)
 
@@ -1187,7 +1327,34 @@ class Window(QDialog):
         self.autostartCheckbox = QCheckBox('启动后自动开始输入')
         self.autostartCheckbox.setChecked(self.config.get('autostart', False))
         startup_layout.addWidget(self.autostartCheckbox)
-        self.hotkeyEnabledCheck = QCheckBox('码表显示／隐藏快捷键')
+        self.pinyinLayerCheck = QCheckBox('启用拼音层按键（双击显示／隐藏码表）')
+        self.pinyinLayerCheck.setChecked(self.config.get('pinyin_layer_enabled', True))
+        self.pinyinLayerCheck.setEnabled(self.guide_key.supported)
+        startup_layout.addWidget(self.pinyinLayerCheck)
+        pinyin_row = QHBoxLayout()
+        self.pinyinModeComboBox = QComboBox()
+        self.pinyinModeComboBox.addItem('按住使用', 'hold')
+        self.pinyinModeComboBox.addItem('单击切换', 'toggle')
+        self.pinyinModeComboBox.setCurrentIndex(1 if self.config.get('pinyin_layer_mode') == 'toggle' else 0)
+        self.pinyinModeComboBox.setToolTip('按住：松开恢复英文。切换：单击切层，等待双击窗口结束；开始输入可立即确认单击。')
+        pinyin_row.addWidget(self.pinyinModeComboBox, 1)
+        self.pinyinKeyComboBox = QComboBox()
+        for number in range(1, 25):
+            if number != 12:
+                self.pinyinKeyComboBox.addItem(f'F{number}', f'F{number}')
+        index = self.pinyinKeyComboBox.findData(self.config.get('pinyin_layer_key', 'F22'))
+        self.pinyinKeyComboBox.setCurrentIndex(index if index >= 0 else self.pinyinKeyComboBox.findData('F22'))
+        self.pinyinKeyComboBox.setToolTip('独立功能键，不能与点、划、确认键重复；F12 由系统保留。')
+        pinyin_row.addWidget(self.pinyinKeyComboBox, 1)
+        self.pinyinApplyButton = QPushButton('应用')
+        self.pinyinApplyButton.setEnabled(self.guide_key.supported)
+        self.pinyinApplyButton.clicked.connect(self.savePinyinKey)
+        pinyin_row.addWidget(self.pinyinApplyButton)
+        startup_layout.addLayout(pinyin_row)
+        self.pinyinKeyStatus = QLabel('默认 F22；拼音由当前系统拼音输入法选字。')
+        self.pinyinKeyStatus.setWordWrap(True)
+        startup_layout.addWidget(self.pinyinKeyStatus)
+        self.hotkeyEnabledCheck = QCheckBox('额外的单击显隐快捷键')
         self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
         self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
         startup_layout.addWidget(self.hotkeyEnabledCheck)
@@ -1268,8 +1435,8 @@ class Window(QDialog):
     def saveSettings (self):
         try:
             self.config = self.collect_config()
-        except (ValueError, TypeError):
-            QMessageBox.warning(self, '设置无效', '请检查输入及声音设置。')
+        except (ValueError, TypeError) as error:
+            QMessageBox.warning(self, '设置无效', str(error) or '请检查输入及声音设置。')
             return
         self.configManager.save_config(self.config)
         self.applyGuideHotkey()
@@ -1305,6 +1472,7 @@ class Window(QDialog):
         self.engine.reset()
         self.audio.stop()
         self.currentCharacter = []
+        self.resetPinyinLayer()
         self.repeaton = False
         self.resetOutput()
         if self.codeslayoutview is not None:
@@ -1364,30 +1532,58 @@ class Window(QDialog):
         now = time.monotonic() if timestamp is None else timestamp
         if now < getattr(self, 'input_started_at', 0):
             return
-        self.processEngineEvents(self.engine.key(role, is_press, now))
+        self.processMorseKey(role, is_press, now)
+
+    def processMorseKey(self, role, is_press, timestamp):
+        if is_press:
+            self.processGestureEvents(self.layer_gesture.note_input())
+        self.processEngineEvents(self.engine.key(role, is_press, timestamp))
 
     def advanceEngine(self):
         if self.listenerThread is not None and not self.config.get('off', False):
             self.drainInput()
 
     def drainInput(self):
-        listener = self.listenerThread
-        if listener is None:
+        if self._draining_input or self._shutting_down:
             return
-        cutoff, events = listener.snapshot_events()
-        for key, is_press, role, timestamp in events:
-            if listener is not self.listenerThread or self.config.get('off', False):
-                return
-            if timestamp >= self.input_started_at:
-                self.processEngineEvents(self.engine.key(role, is_press, timestamp))
-        if listener is self.listenerThread:
-            self.processEngineEvents(self.engine.tick(cutoff))
+        listener = self.listenerThread
+        self._draining_input = True
+        try:
+            guide_cutoff, guide_events = self.guide_key.snapshot_events()
+            events = self._pending_input + [(at, 0, pressed, None) for pressed, at in guide_events]
+            cutoff = guide_cutoff
+            if listener is not None:
+                input_cutoff, inputs = listener.snapshot_events()
+                cutoff = min(cutoff, input_cutoff)
+                events += [(at, 1, pressed, role) for key, pressed, role, at in inputs]
+            self._pending_input = [event for event in events if event[0] > cutoff]
+            for at, source, pressed, role in sorted(
+                    (event for event in events if event[0] <= cutoff), key=lambda item: (item[0], item[1])):
+                self.processGestureEvents(self.layer_gesture.tick(at))
+                if source == 0:
+                    # Commit earlier input on the ordered clock before applying
+                    # a later layer edge; signal delivery order is irrelevant.
+                    if listener is not None and listener is self.listenerThread:
+                        self.processEngineEvents(self.engine.tick(at))
+                    self.processGuideKey(pressed, at)
+                elif (listener is not None and listener is self.listenerThread
+                      and not self.config.get('off', False) and at >= self.input_started_at):
+                    self.processMorseKey(role, pressed, at)
+            if listener is not None and listener is self.listenerThread:
+                self.processEngineEvents(self.engine.tick(cutoff))
+            self.processGestureEvents(self.layer_gesture.tick(cutoff))
+        finally:
+            self._draining_input = False
 
     def processEngineEvents(self, events):
         for kind, payload in events:
             if kind == 'tone':
+                if payload['on'] and self._sequence_pinyin is None:
+                    self._sequence_pinyin = self._pinyin_layer
                 self.audio.set_tone(payload['on'], timestamp=payload.get('at'))
             elif kind == 'symbol':
+                if self._sequence_pinyin is None:
+                    self._sequence_pinyin = self._pinyin_layer
                 self.addDit() if payload['symbol'] == 1 else self.addDah()
             elif kind == 'commit':
                 view = self.codeslayoutview
@@ -1406,6 +1602,7 @@ class Window(QDialog):
             elif kind == 'reset':
                 self.audio.stop()
                 self.currentCharacter = []
+                self._sequence_pinyin = None
                 if self.codeslayoutview is not None:
                     self.codeslayoutview.reset()
                     if payload.get('reason') in ('timing_overrun', 'late_input') and hasattr(self.codeslayoutview, 'showMessage'):
@@ -1431,6 +1628,7 @@ class Window(QDialog):
     def endCharacter(self):
         character, self.currentCharacter = self.currentCharacter, []
         success, label = self.handleMorseCode(character)
+        self._sequence_pinyin = None
         if self.codeslayoutview is not None:
             self.codeslayoutview.reset()
             if character and hasattr(self.codeslayoutview, 'showResult'):
@@ -1451,8 +1649,14 @@ class Window(QDialog):
         if not morse_code:
             return False, ''
         try:
-            items = self.layoutManager.get_active_layout().get('items', [])
+            pinyin = self._sequence_pinyin if self._sequence_pinyin is not None else self._pinyin_layer
+            layout = self._pinyin_layout if pinyin else self.layoutManager.get_active_layout()
+            items = layout.get('items', [])
             item = next((item for item in items if item.get('code') == morse_code), None)
+            if item is not None and 'pinyin_text' in item:
+                self.key_output.send_pinyin(item['pinyin_text'])
+                self.repeaton = False
+                return True, item['label']
             if item is None or '_action' not in item:
                 return False, '无效码：' + morse_code.replace('1', '•').replace('2', '—')
             action = item['_action']

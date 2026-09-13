@@ -30,6 +30,7 @@ class WindowBehaviorTests(unittest.TestCase):
 
         # Keep the real listener and its Qt signal, without starting an OS hook.
         self.start_listener = self.enterContext(patch.object(morse.KeyListenerThread, "start"))
+        self.layer_hook = self.enterContext(patch.object(morse.GuideKeyListener, 'set_key', return_value=True))
         self.enterContext(patch.object(morse.keyboard, "hook_key", side_effect=AssertionError("Unexpected OS hook")))
         for name in ("press", "release", "press_and_release", "write"):
             self.enterContext(patch.object(morse.keyboard, name, side_effect=AssertionError("Unexpected key output")))
