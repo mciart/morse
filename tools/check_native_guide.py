@@ -83,10 +83,37 @@ def check_native(report, save_images=False):
     app = backdrop = view = None
     foreground_baseline = None
     result = dict(status='failed', skipped=False, baseline_established=False,
-                  stages=stages, qt_warnings=warnings,
+                  stages=stages, qt_warnings=warnings, foreground_checks=[],
                   display_change_test='simulated font metrics and Qt screen signals; real desktop pixel sampling')
 
-    def assert_mouse_activation_guard(widget, *, taskbar):
+    def foreground_identity(hwnd):
+        """Identify owned windows without reading another application's UI."""
+        hwnd = int(hwnd or 0)
+        owner = wintypes.DWORD()
+        if hwnd:
+            api.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        role = 'none' if not hwnd else 'external'
+        if owner.value == os.getpid():
+            role = 'owned-other'
+            for widget in app.topLevelWidgets():
+                if (not sip.isdeleted(widget) and widget.testAttribute(Qt.WA_WState_Created)
+                        and int(widget.effectiveWinId() or 0) == hwnd):
+                    role = ('backdrop' if widget is backdrop else 'guide' if widget is view
+                            else type(widget).__name__)
+                    break
+        return dict(hwnd=hwnd, owner_pid=owner.value, role=role)
+
+    def assert_foreground(stage):
+        actual = foreground_identity(api.GetForegroundWindow())
+        result['foreground_checks'].append(dict(stage=stage, actual=actual))
+        if foreground_baseline and actual['hwnd'] != foreground_baseline:
+            expected = foreground_identity(foreground_baseline)
+            result['owned_foreground_test'] = dict(status='failed', stage=stage,
+                expected=expected, actual=actual)
+            raise AssertionError(f'Foreground changed during {stage}: '
+                                 f'expected {expected}, actual {actual}')
+
+    def assert_mouse_activation_guard(widget, *, taskbar, stage):
         # Messages go only to HWNDs owned by this test process. This exercises
         # the real Windows message dispatch without moving/injecting the mouse.
         hwnd = int(widget.effectiveWinId())
@@ -98,8 +125,7 @@ def check_native(report, save_images=False):
         assert bool(style & 0x00040000) == taskbar, 'Taskbar style changed'
         for button in (0x0201, 0x0204):  # left/right; HTCLIENT=1
             assert api.SendMessageW(hwnd, 0x0021, hwnd, (button << 16) | 1) == 3, 'Mouse activation not declined'
-        if foreground_baseline:
-            assert api.GetForegroundWindow() == foreground_baseline, 'Guide interaction took foreground'
+        assert_foreground(stage)
 
     def check_menus():
         menu = view.createViewMenu()
@@ -107,11 +133,11 @@ def check_native(report, save_images=False):
         try:
             menu.popup(view.mapToGlobal(QPoint(20, 20)))
             flush()
-            assert_mouse_activation_guard(menu, taskbar=False)
+            assert_mouse_activation_guard(menu, taskbar=False, stage='menu-popup')
             assert submenu is not None, 'Missing compact size submenu'
             submenu.popup(menu.mapToGlobal(QPoint(menu.width() + 2, 0)))
             flush()
-            assert_mouse_activation_guard(submenu, taskbar=False)
+            assert_mouse_activation_guard(submenu, taskbar=False, stage='menu-size-submenu')
             submenu.hide()
             action = next(action for action in menu.actions() if action.text() == '显示鼠标')
             previous = view._mouse_visible
@@ -119,7 +145,7 @@ def check_native(report, save_images=False):
             flush()
             assert view._mouse_visible != previous and not menu.isVisible(), 'Menu action lost mouse input'
             assert view.createViewMenu() is menu, 'Guide created another popup instead of reusing its owned menu'
-            assert_mouse_activation_guard(view, taskbar=True)
+            assert_mouse_activation_guard(view, taskbar=True, stage='menu-mouse-action')
             view.setMouseVisible(previous)
             flush()
         finally:
@@ -169,13 +195,15 @@ def check_native(report, save_images=False):
         return native_geometry()[:2]
 
     def sample(name, visible=True, minimized=False):
+        assert_foreground(name + ':before-flush')
         flush()
+        assert_foreground(name + ':after-flush')
         assert not warnings, 'Qt warnings: ' + '; '.join(warnings)
         assert view.isVisible() == visible and view.isMinimized() == minimized, name
         hwnd = int(view.effectiveWinId() or 0)
         if visible:
             assert hwnd and api.IsWindowVisible(hwnd) and bool(api.IsIconic(hwnd)) == minimized, name
-            assert_mouse_activation_guard(view, taskbar=True)
+            assert_mouse_activation_guard(view, taskbar=True, stage=name + ':mouse-activation')
         origin, pixmap, image = capture()
         assert not image.isNull(), 'Desktop capture unavailable'
         ratio_x, ratio_y = image.width() / backdrop.width(), image.height() / backdrop.height()
@@ -281,7 +309,8 @@ def check_native(report, save_images=False):
         flush()
         if api.GetForegroundWindow() == int(backdrop.winId()):
             foreground_baseline = int(backdrop.winId())
-            result['owned_foreground_test'] = dict(status='running')
+            result['owned_foreground_test'] = dict(status='running',
+                baseline=foreground_identity(foreground_baseline))
         else:
             result['owned_foreground_test'] = dict(status='unavailable',
                 reason='Windows did not grant foreground to the owned test backdrop')
@@ -377,10 +406,18 @@ def check_native(report, save_images=False):
         sample('hidden-mode-change', visible=False)
         show_guide_without_activation(view)
         sample('hidden-restored')
-        view.showMinimized()
+        # Establish the minimized scenario using the application's explicit
+        # SW_SHOWMINNOACTIVE path. Qt.showMinimized may request an activating
+        # Windows minimize operation; changing the foreground is not the
+        # scenario under test. Keep the original baseline throughout.
+        assert_foreground('minimize:before')
+        show_guide_without_activation(view, keep_minimized=True)
+        assert_foreground('minimize:immediate')
         flush()
+        assert_foreground('minimize:after-flush')
         assert view.isMinimized() and api.IsIconic(int(view.winId()))
         view.setCompactMode(False)
+        assert_foreground('minimized-mode-change:immediate')
         sample('minimized-mode-change', minimized=True)
         show_guide_without_activation(view)
         sample('minimized-restored')
@@ -423,6 +460,7 @@ def check_native(report, save_images=False):
         assert view.compactScale() == requested_scale
         if foreground_baseline:
             result['owned_foreground_test'] = dict(status='passed',
+                baseline=foreground_identity(foreground_baseline),
                 tested='show, click, drag, resize, menus and recreated HWNDs; no global input')
         result['status'] = 'passed'
     except NativeDesktopUnavailable as error:

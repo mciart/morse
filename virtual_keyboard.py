@@ -946,10 +946,6 @@ class VirtualKeyboardView(QWidget):
         panel.addStretch()
         return panel
 
-    def setAvailableLayouts(self, layouts, active):
-        # Kept for the host's shared view interface; desktop commands stay together.
-        pass
-
     def _set_compact_header(self, compact):
         if compact == self._compact_header:
             return

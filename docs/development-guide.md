@@ -40,4 +40,4 @@ py -3 -m venv .venv
 
 构建脚本执行测试、资源校验、程序打包和中文安装包生成；安装包与 SHA256 校验文件位于 `dist`。编译器解包到项目的 `build/tools`，不安装全局工具。程序包只包含清单内的资源，不带开发者配置、日志或个人数据。
 
-发布前更新根目录 `version` 和 `docs/releases` 中的中文说明。发布工作流使用版本标签对应的代码重新构建、验证，再上传到 GitHub Release。
+发布前更新根目录 `version` 和 `docs/releases` 中的中文说明。可先在 Actions 中手动运行“构建 Windows 安装包”，验证当前提交后再建立版本标签。发布工作流使用版本标签对应的代码重新构建、验证，再上传到 GitHub Release。

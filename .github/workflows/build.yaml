@@ -1,6 +1,7 @@
 name: 构建 Windows 安装包
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
