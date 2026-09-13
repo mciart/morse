@@ -247,7 +247,6 @@ class SettingsWindowSizer(QObject):
         for checkbox in content.findChildren(QCheckBox):
             remaining = self.scroll.viewport().width() - checkbox.mapTo(content, QPoint()).x() - 16
             wrap_checkbox_text(checkbox, max(40, min(checkbox.width(), remaining)))
-        content.updateGeometry()
 
     def fit_to_screen(self, *, initial=False):
         available = self.available_geometry()

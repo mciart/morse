@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
@@ -148,6 +149,19 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
         sizer._screen_metrics_changed()
         self.pump()
         self.assertEqual(window.geometry(), wanted)
+
+    def test_settled_settings_do_not_schedule_idle_relayout_loop(self):
+        window, scroll, actions, sizer = self.make_settings()
+        window.resize(340, 300)
+        # Let the resize, caption wrapping, and scroll viewport adjustment
+        # settle before observing a period with no user or screen changes.
+        for _ in range(20):
+            self.app.processEvents()
+        with patch.object(sizer, 'reflow', wraps=sizer.reflow) as reflow:
+            for _ in range(100):
+                self.app.processEvents()
+            self.assertEqual(reflow.call_count, 0)
+            self.assertFalse(sizer._timer.isActive())
 
     def test_smaller_virtual_screen_constrains_existing_geometry(self):
         window, scroll, actions, sizer = self.make_settings()
