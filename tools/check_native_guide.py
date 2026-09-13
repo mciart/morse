@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKGROUND = (229, 16, 160)
@@ -159,10 +160,13 @@ def check_native(report, save_images=False):
         own_region()
         return origin, pixmap, pixmap.toImage()
 
-    def native_position():
+    def native_geometry():
         bounds = wintypes.RECT()
         assert api.GetWindowRect(int(view.effectiveWinId()), ctypes.byref(bounds)), 'Cannot read guide native bounds'
-        return bounds.left, bounds.top
+        return bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top
+
+    def native_position():
+        return native_geometry()[:2]
 
     def sample(name, visible=True, minimized=False):
         flush()
@@ -328,10 +332,19 @@ def check_native(report, save_images=False):
         drag(QPoint(view.width() - 2, view.height() - 2), QPoint(25, 15))
         assert view.width() > old_size.width()
         sample('corner-resize')
-        old_position, old_size = view.pos(), view.size()
-        drag(view.scroll_area.viewport().rect().center(), QPoint(16, 12))
-        assert view.pos() != old_position and view.size() == old_size
+        old_geometry, old_size = native_geometry(), view.size()
+        drag_delta = QPoint(16, 12)
+        drag(view.scroll_area.viewport().rect().center(), drag_delta)
+        # QWindow moves the HWND immediately; QWidget receives its new position
+        # through a queued geometry event. sample already drains that event loop.
         sample('drag-move')
+        expected_geometry = (old_geometry[0] + drag_delta.x(), old_geometry[1] + drag_delta.y(),
+                             old_geometry[2], old_geometry[3])
+        actual_geometry = native_geometry()
+        assert actual_geometry == expected_geometry, (
+            f'Native drag geometry changed unexpectedly: expected {expected_geometry}, actual {actual_geometry}')
+        assert view.size() == old_size, 'Dragging changed the Qt guide size'
+        stages[-1]['native_drag_delta'] = [drag_delta.x(), drag_delta.y()]
         # Deliberate resizing/moving establishes the compact mode's latest
         # position; returning to full mode must retain its separate position.
         saved_positions[True] = native_position()
@@ -415,7 +428,9 @@ def check_native(report, save_images=False):
     except NativeDesktopUnavailable as error:
         result.update(status='unavailable', skipped=True, reason=str(error))
     except Exception as error:
-        result['reason'] = str(error)
+        result['reason'] = str(error) or type(error).__name__
+        location = traceback.extract_tb(error.__traceback__)[-1]
+        result['failure_location'] = f'{Path(location.filename).name}:{location.lineno}'
     finally:
         for widget in (view, backdrop):
             if widget is not None and not sip.isdeleted(widget):
