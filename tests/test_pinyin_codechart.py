@@ -58,9 +58,10 @@ class PinyinCodeChartTests(unittest.TestCase):
         for example in ('y + ing → ying', 'j + uan → juan', 'l + üe → lve'):
             self.assertIn(example, text)
         self.assertIn('松开恢复', text)
-        self.assertIn('默认采用“按住”方式', text)
-        self.assertIn('单击切换中英文层，松开后保留当前层', text)
-        self.assertIn('双击只显示或隐藏码表，不改变已选择的层', text)
+        self.assertIn('新用户默认采用“双击切换”', text)
+        self.assertIn('单击 F22 显示或隐藏码表，双击切换中英文层一次，松开后保留当前层', text)
+        self.assertIn('双击保持码表原有显隐状态，长按不触发操作', text)
+        self.assertIn('按住进入拼音层，松开恢复英文，双击只显示或隐藏码表', text)
         self.assertIn('可在设置中开启微软拼音状态同步', text)
 
     def test_symbols_explain_ime_punctuation_and_show_actual_codes(self):

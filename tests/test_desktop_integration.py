@@ -105,7 +105,7 @@ class DesktopIntegrationTests(TestCase):
             self.window.startDesktopIntegration()
             self.window.hotkeyApplyButton.click()
             register.assert_called_with('')  # The same key belongs to the two-gesture listener.
-            self.assertIn('按住拼音／双击显隐', self.window.hotkeyStatus.text())
+            self.assertIn('单击显隐／双击切换中英文', self.window.hotkeyStatus.text())
         self.assertEqual(self.window.configManager.config['guide_hotkey'], 'F22')
         selector.setCurrentIndex(selector.findData(None))
         self.assertFalse(self.window.hotkeyEdit.isHidden())
@@ -127,14 +127,23 @@ class DesktopIntegrationTests(TestCase):
         self.assertNotEqual(self.window.config.get('guide_hotkey'), 'Ctrl+F22')
 
     def test_pinyin_mode_and_key_are_configurable_and_persisted(self):
-        self.window.pinyinToggleRadio.setChecked(True)
+        self.assertEqual(self.window.selectedPinyinMode(), 'toggle')
+        self.assertEqual(self.window.layer_gesture.mode, 'toggle')
+        self.assertEqual(self.window.pinyinToggleRadio.text(), '双击切换')
+        self.assertIn('单击显示／隐藏码表，双击切换中／英文', self.window.pinyinKeyStatus.text())
+        self.window.pinyinHoldRadio.setChecked(True)
         self.window.pinyinKeyComboBox.setCurrentIndex(self.window.pinyinKeyComboBox.findData('F21'))
         with patch.object(self.window.guide_hotkey, 'set_sequence'):
             self.window.startDesktopIntegration()
             self.window.pinyinApplyButton.click()
         self.layer_hook.assert_called_with('F21')
-        self.assertEqual(self.window.layer_gesture.mode, 'toggle')
+        self.assertEqual(self.window.layer_gesture.mode, 'hold')
         self.assertEqual(self.window.configManager.config['pinyin_layer_key'], 'F21')
+        self.assertEqual(self.window.configManager.config['pinyin_layer_mode'], 'hold')
+        self.window.pinyinToggleRadio.setChecked(True)
+        with patch.object(self.window.guide_hotkey, 'set_sequence'):
+            self.window.pinyinApplyButton.click()
+        self.assertEqual(self.window.layer_gesture.mode, 'toggle')
         self.assertEqual(self.window.configManager.config['pinyin_layer_mode'], 'toggle')
 
     def test_disabling_pinyin_restores_same_key_single_hotkey(self):
@@ -150,11 +159,11 @@ class DesktopIntegrationTests(TestCase):
         self.assertEqual(self.window.config.get('guide_hotkey'), 'F22')
 
     def test_pinyin_switch_mode_and_ime_sync_option_survive_settings_reload(self):
-        self.window.pinyinToggleRadio.setChecked(True)
+        self.window.pinyinHoldRadio.setChecked(True)
         self.window.imeSyncCheck.setChecked(True)
         self.window.SaveButton.click()
         restored = morse.ConfigManager(self.window.configManager.config_file)
-        self.assertEqual(restored.config['pinyin_layer_mode'], 'toggle')
+        self.assertEqual(restored.config['pinyin_layer_mode'], 'hold')
         self.assertTrue(restored.config['pinyin_ime_sync'])
         self.assertFalse(self.window.ime_sync.enabled)  # Settings alone do not write to the IME.
 

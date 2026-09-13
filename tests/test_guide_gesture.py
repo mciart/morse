@@ -145,133 +145,168 @@ class ToggleLayerGestureTests(unittest.TestCase):
         self.gesture = HoldTapGesture(mode='toggle')
 
     def tap(self, down, up):
-        self.assertEqual(self.gesture.key(True, down), [])
-        return self.gesture.key(False, up)
+        return self.gesture.key(True, down) + self.gesture.key(False, up)
 
-    def test_single_tap_keeps_layer_unchanged_until_deadline(self):
+    def test_single_tap_waits_for_deadline_then_only_changes_visibility(self):
         self.assertEqual(self.tap(0, 0.1), [])
         self.assertFalse(self.gesture.held)
         self.assertFalse(self.gesture.layer_active)
         self.assertEqual(self.gesture.tick(0.399999), [])
-        self.assertEqual(self.gesture.tick(0.4), [('layer', True)])
-        self.assertTrue(self.gesture.layer_active)
+        self.assertEqual(self.gesture.tick(0.4), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
         self.assertEqual(self.gesture.tick(10), [])
 
-    def test_second_single_tap_switches_back_and_stays_latched(self):
-        self.tap(0, 0.1)
-        self.gesture.tick(0.4)
-        self.assertEqual(self.tap(1, 1.1), [])
-        self.assertTrue(self.gesture.layer_active)
-        self.assertEqual(self.gesture.tick(1.41), [('layer', False)])
-        self.assertFalse(self.gesture.layer_active)
+    def test_separate_single_taps_only_change_visibility(self):
+        for down in (0, 1, 2):
+            self.assertEqual(self.tap(down, down + .1), [])
+            self.assertEqual(self.gesture.tick(down + .41), [('toggle', None)])
+            self.assertFalse(self.gesture.layer_active)
 
-    def test_double_tap_changes_visibility_without_any_layer_event(self):
-        events = self.tap(0, 0.1) + self.tap(0.2, 0.3)
-        self.assertEqual(events, [('toggle', None)])
+    def test_single_tap_preserves_already_active_layer(self):
+        self.gesture.sync_layer(True)
+        self.assertEqual(self.tap(0, .1), [])
+        self.assertEqual(self.gesture.tick(.4), [('toggle', None)])
+        self.assertTrue(self.gesture.layer_active)
+
+    def test_double_tap_switches_layer_once_without_visibility_event(self):
+        self.assertEqual(self.tap(0, .1), [])
         self.assertFalse(self.gesture.layer_active)
+        self.assertEqual(self.gesture.key(True, .2), [])
+        self.assertFalse(self.gesture.layer_active)
+        self.assertEqual(self.gesture.key(False, .3), [('layer', True)])
+        self.assertTrue(self.gesture.layer_active)
         self.assertEqual(self.gesture.tick(1), [])
 
-    def test_double_tap_preserves_already_active_layer(self):
-        self.tap(0, 0.1)
-        self.gesture.tick(0.4)
-        self.assertEqual(self.tap(1, 1.1) + self.tap(1.2, 1.3), [('toggle', None)])
-        self.assertTrue(self.gesture.layer_active)
+    def test_second_double_tap_switches_back_and_stays_latched(self):
+        self.assertEqual(self.tap(0, .1) + self.tap(.2, .3), [('layer', True)])
+        self.assertEqual(self.tap(1, 1.1) + self.tap(1.2, 1.3), [('layer', False)])
+        self.assertFalse(self.gesture.layer_active)
         self.assertEqual(self.gesture.tick(2), [])
 
     def test_release_just_before_deadline_is_double_tap(self):
-        self.tap(0, 0.1)
-        self.assertEqual(self.tap(0.2, 0.399999), [('toggle', None)])
-        self.assertEqual(self.gesture.tick(0.4), [])
+        self.tap(0, .1)
+        self.assertEqual(self.tap(.2, .399999), [('layer', True)])
+        self.assertEqual(self.gesture.tick(.4), [])
 
-    def test_release_at_deadline_is_two_single_taps(self):
-        self.tap(0, 0.1)
-        self.gesture.key(True, 0.2)
-        self.assertEqual(self.gesture.key(False, 0.4), [('layer', True)])
-        self.assertEqual(self.gesture.tick(0.7), [('layer', False)])
+    def test_release_at_deadline_is_two_visibility_clicks(self):
+        self.tap(0, .1)
+        self.gesture.key(True, .2)
+        self.assertEqual(self.gesture.key(False, .4), [('toggle', None)])
+        self.assertEqual(self.gesture.tick(.7), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
 
-    def test_timer_before_release_matches_release_before_timer_at_deadline(self):
-        first = HoldTapGesture(mode='toggle')
-        second = HoldTapGesture(mode='toggle')
+    def test_timer_and_release_order_at_deadline_is_deterministic(self):
+        first, second = HoldTapGesture(mode='toggle'), HoldTapGesture(mode='toggle')
         for gesture in (first, second):
             gesture.key(True, 0)
-            gesture.key(False, 0.1)
-            gesture.key(True, 0.2)
-        first_events = first.tick(0.4) + first.key(False, 0.4)
-        second_events = second.key(False, 0.4) + second.tick(0.4)
-        self.assertEqual(first_events, [('layer', True)])
+            gesture.key(False, .1)
+            gesture.key(True, .2)
+        first_events = first.tick(.4) + first.key(False, .4)
+        second_events = second.key(False, .4) + second.tick(.4)
+        self.assertEqual(first_events, [('toggle', None)])
         self.assertEqual(first_events, second_events)
         self.assertEqual(first.tick(1), second.tick(1))
+        self.assertFalse(first.layer_active)
 
-    def test_input_after_first_tap_immediately_commits_pending_single(self):
-        self.tap(0, 0.1)
-        self.assertEqual(self.gesture.note_input(), [('layer', True)])
-        self.assertTrue(self.gesture.layer_active)
+    def test_input_after_first_tap_confirms_visibility_and_never_switches_layer(self):
+        self.tap(0, .1)
+        self.assertEqual(self.gesture.note_input(), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
         self.assertEqual(self.gesture.note_input(), [])
-        self.assertEqual(self.gesture.tick(0.4), [])
-        self.assertEqual(self.tap(0.2, 0.3), [])
-        self.assertEqual(self.gesture.tick(0.6), [('layer', False)])
+        self.assertEqual(self.gesture.tick(.4), [])
+        self.assertEqual(self.tap(.2, .3), [])
+        self.assertEqual(self.gesture.tick(.6), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
 
-    def test_input_during_second_press_commits_first_without_later_toggle(self):
-        self.tap(0, 0.1)
-        self.gesture.key(True, 0.2)
-        self.assertEqual(self.gesture.note_input(), [('layer', True)])
-        self.assertEqual(self.gesture.key(False, 0.3), [])
+    def test_input_during_second_press_consumes_pair_without_switching_layer(self):
+        self.gesture.sync_layer(True)
+        self.tap(0, .1)
+        self.gesture.key(True, .2)
+        self.assertEqual(self.gesture.note_input(), [('toggle', None)])
+        self.assertEqual(self.gesture.note_input(), [])
+        self.assertEqual(self.gesture.key(False, .3), [])
         self.assertEqual(self.gesture.tick(1), [])
         self.assertTrue(self.gesture.layer_active)
 
-    def test_long_press_switches_once_on_release_without_waiting(self):
-        self.assertEqual(self.gesture.key(True, 0), [])
-        self.assertTrue(self.gesture.held)
-        self.assertEqual(self.gesture.tick(1), [])
-        self.assertEqual(self.gesture.key(False, 1), [('layer', True)])
-        self.assertFalse(self.gesture.held)
-        self.assertEqual(self.gesture.tick(2), [])
-        self.assertEqual(self.tap(3, 4), [('layer', False)])
-
-    def test_auto_repeat_does_not_create_taps_or_shorten_long_press(self):
+    def test_input_during_first_press_cancels_that_click(self):
         self.gesture.key(True, 0)
-        self.assertEqual(self.gesture.key(True, 1), [])
+        self.assertEqual(self.gesture.note_input(), [])
+        self.assertEqual(self.gesture.key(False, .1), [])
+        self.assertEqual(self.tap(.2, .3), [])
+        self.assertEqual(self.gesture.tick(.6), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
+
+    def test_long_press_has_no_layer_or_visibility_action(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                self.gesture.sync_layer(active)
+                self.assertEqual(self.gesture.key(True, 0), [])
+                self.assertTrue(self.gesture.held)
+                self.assertEqual(self.gesture.tick(1), [])
+                self.assertEqual(self.gesture.key(False, 1), [])
+                self.assertFalse(self.gesture.held)
+                self.assertEqual(self.gesture.tick(2), [])
+                self.assertEqual(self.gesture.layer_active, active)
+
+    def test_long_second_press_preserves_first_visibility_click_until_deadline(self):
+        self.tap(0, .01)
+        self.assertEqual(self.tap(.02, .28), [])
+        self.assertEqual(self.gesture.tick(.31), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
+        self.assertEqual(self.gesture.tick(1), [])
+
+    def test_auto_repeat_and_orphan_release_do_not_create_clicks(self):
+        self.assertEqual(self.gesture.key(False, 0), [])
+        self.gesture.key(True, 1)
         self.assertEqual(self.gesture.key(True, 1.1), [])
-        self.assertEqual(self.gesture.key(False, 1.2), [('layer', True)])
-        self.assertEqual(self.gesture.key(False, 1.3), [])
-        self.assertEqual(self.gesture.tick(2), [])
+        self.assertEqual(self.gesture.key(True, 2), [])
+        self.assertEqual(self.gesture.key(False, 2.1), [])
+        self.assertEqual(self.gesture.key(False, 2.2), [])
+        self.assertEqual(self.gesture.tick(3), [])
+
+    def test_repeat_during_short_press_does_not_create_double_tap(self):
+        self.gesture.key(True, 0)
+        self.assertEqual(self.gesture.key(True, .05), [])
+        self.assertEqual(self.gesture.key(False, .1), [])
+        self.assertEqual(self.gesture.tick(.4), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
 
     def test_new_key_event_also_resolves_expired_pending_single(self):
-        self.tap(0, 0.1)
-        self.assertEqual(self.gesture.key(True, 1), [('layer', True)])
+        self.tap(0, .1)
+        self.assertEqual(self.gesture.key(True, 1), [('toggle', None)])
         self.assertEqual(self.gesture.key(False, 1.1), [])
-        self.assertEqual(self.gesture.tick(1.5), [('layer', False)])
+        self.assertEqual(self.gesture.tick(1.5), [('toggle', None)])
+        self.assertFalse(self.gesture.layer_active)
 
     def test_reset_discards_pending_single_and_physical_press(self):
-        self.tap(0, 0.1)
-        self.gesture.key(True, 0.2)
+        self.tap(0, .1)
+        self.gesture.key(True, .2)
         self.assertEqual(self.gesture.reset(), [])
         self.assertFalse(self.gesture.held)
         self.assertFalse(self.gesture.layer_active)
         self.assertEqual(self.gesture.tick(1), [])
         self.assertEqual(self.gesture.key(False, 1.1), [])
 
-    def test_reset_active_layer_reports_release_and_clears_pending_flip(self):
-        self.tap(0, 0.1)
-        self.gesture.tick(0.4)
-        self.tap(1, 1.1)
+    def test_reset_active_layer_reports_release_and_clears_pending_click(self):
+        self.gesture.sync_layer(True)
+        self.tap(0, .1)
         self.assertEqual(self.gesture.reset(), [('layer', False)])
         self.assertEqual(self.gesture.reset(), [])
         self.assertEqual(self.gesture.tick(2), [])
         self.assertFalse(self.gesture.layer_active)
 
-    def test_repeated_double_taps_never_change_layer(self):
-        for first_down in (0, 1, 2):
-            self.tap(first_down, first_down + 0.1)
-            self.assertEqual(self.tap(first_down + 0.2, first_down + 0.3), [('toggle', None)])
-        self.assertFalse(self.gesture.layer_active)
+    def test_repeated_double_taps_switch_layer_once_per_pair(self):
+        events = []
+        for down in (0, 1, 2):
+            events += self.tap(down, down + .1) + self.tap(down + .2, down + .3)
+        self.assertEqual(events, [('layer', True), ('layer', False), ('layer', True)])
         self.assertEqual(self.gesture.tick(3), [])
 
-    def test_input_during_hold_cancels_late_unintended_layer_change(self):
-        self.gesture.key(True, 0)
-        self.assertEqual(self.gesture.note_input(), [])
-        self.assertEqual(self.gesture.key(False, 1), [])
-        self.assertFalse(self.gesture.layer_active)
+    def test_three_taps_are_one_layer_change_then_one_visibility_change(self):
+        events = self.tap(0, .05) + self.tap(.1, .15) + self.tap(.2, .25)
+        self.assertEqual(events, [('layer', True)])
+        self.assertEqual(self.gesture.tick(.55), [('toggle', None)])
+        self.assertTrue(self.gesture.layer_active)
 
     def test_hold_mode_note_input_commits_hold_without_toggle_deadline(self):
         gesture = HoldTapGesture()
@@ -286,48 +321,84 @@ class ToggleLayerGestureTests(unittest.TestCase):
 
 
 class ExternalLayerSyncTests(unittest.TestCase):
-    def test_sync_is_silent_and_next_toggle_uses_observed_state(self):
+    def test_sync_is_silent_and_next_double_click_uses_observed_state(self):
         gesture = HoldTapGesture(mode='toggle')
         self.assertEqual(gesture.sync_layer(True), [])
         self.assertTrue(gesture.layer_active)
         self.assertFalse(gesture.held)
-        self.assertEqual(gesture.key(True, 0), [])
-        self.assertEqual(gesture.key(False, 0.1), [])
-        self.assertEqual(gesture.tick(0.4), [('layer', False)])
+        events = []
+        for down, up in ((0, .1), (.2, .3)):
+            events += gesture.key(True, down) + gesture.key(False, up)
+        self.assertEqual(events, [('layer', False)])
+        self.assertEqual(gesture.tick(1), [])
 
-    def test_changed_external_state_cancels_pending_single(self):
+    def test_changed_external_state_preserves_pending_single_visibility(self):
         gesture = HoldTapGesture(mode='toggle')
         gesture.key(True, 0)
-        gesture.key(False, 0.1)
+        gesture.key(False, .1)
         self.assertEqual(gesture.sync_layer(True), [])
+        self.assertEqual(gesture.tick(.4), [('toggle', None)])
+        self.assertTrue(gesture.layer_active)
+
+    def test_external_change_between_taps_switches_latest_layer(self):
+        gesture = HoldTapGesture(mode='toggle')
+        gesture.key(True, 0)
+        gesture.key(False, .1)
+        gesture.sync_layer(True)
+        self.assertEqual(gesture.key(True, .2), [])
+        self.assertEqual(gesture.key(False, .3), [('layer', False)])
+        self.assertFalse(gesture.layer_active)
+
+    def test_external_change_during_second_press_switches_latest_layer(self):
+        gesture = HoldTapGesture(mode='toggle')
+        gesture.sync_layer(True)
+        gesture.key(True, 0)
+        gesture.key(False, .1)
+        gesture.key(True, .2)
+        gesture.sync_layer(False)
+        self.assertTrue(gesture.held)
+        self.assertEqual(gesture.key(False, .3), [('layer', True)])
+        self.assertEqual(gesture.tick(1), [])
+
+    def test_external_changes_do_not_reenable_click_consumed_by_morse(self):
+        gesture = HoldTapGesture(mode='toggle')
+        gesture.key(True, 0)
+        gesture.key(False, .1)
+        gesture.key(True, .2)
+        self.assertEqual(gesture.note_input(), [('toggle', None)])
+        gesture.sync_layer(True)
+        self.assertEqual(gesture.note_input(), [])
+        self.assertEqual(gesture.key(False, .3), [])
         self.assertEqual(gesture.tick(1), [])
         self.assertTrue(gesture.layer_active)
 
     def test_unchanged_observation_preserves_pending_single(self):
         gesture = HoldTapGesture(mode='toggle')
         gesture.key(True, 0)
-        gesture.key(False, 0.1)
+        gesture.key(False, .1)
         self.assertEqual(gesture.sync_layer(False), [])
-        self.assertEqual(gesture.tick(0.4), [('layer', True)])
+        self.assertEqual(gesture.tick(.4), [('toggle', None)])
+        self.assertFalse(gesture.layer_active)
 
     def test_unchanged_observations_preserve_double_tap_in_either_mode(self):
         for mode in ('hold', 'toggle'):
             with self.subTest(mode=mode):
                 gesture = HoldTapGesture(mode=mode)
                 gesture.sync_layer(True)
-                events = gesture.key(True, 0) + gesture.key(False, 0.1)
+                events = gesture.key(True, 0) + gesture.key(False, .1)
                 self.assertEqual(gesture.sync_layer(True), [])
-                events += gesture.key(True, 0.2) + gesture.key(False, 0.3)
-                self.assertEqual(events, [('toggle', None)])
-                self.assertTrue(gesture.layer_active)
+                events += gesture.key(True, .2) + gesture.key(False, .3)
+                expected = [('toggle', None)] if mode == 'hold' else [('layer', False)]
+                self.assertEqual(events, expected)
+                self.assertEqual(gesture.layer_active, mode == 'hold')
 
     def test_external_change_breaks_hold_mode_double_tap_pair(self):
         gesture = HoldTapGesture()
         gesture.key(True, 0)
-        gesture.key(False, 0.1)
+        gesture.key(False, .1)
         self.assertEqual(gesture.sync_layer(True), [])
-        self.assertEqual(gesture.key(True, 0.2), [])
-        self.assertEqual(gesture.key(False, 0.3), [])
+        self.assertEqual(gesture.key(True, .2), [])
+        self.assertEqual(gesture.key(False, .3), [])
         self.assertTrue(gesture.layer_active)
 
     def test_sync_preserves_unconfirmed_physical_hold_and_deadline(self):
@@ -335,18 +406,18 @@ class ExternalLayerSyncTests(unittest.TestCase):
         gesture.key(True, 0)
         gesture.sync_layer(True)
         self.assertTrue(gesture.held)
-        self.assertEqual(gesture.tick(0.18), [])  # Already in Chinese.
-        self.assertEqual(gesture.key(False, 0.2), [('held', False)])
+        self.assertEqual(gesture.tick(.18), [])
+        self.assertEqual(gesture.key(False, .2), [('held', False)])
         self.assertFalse(gesture.layer_active)
 
     def test_sync_during_short_press_does_not_force_external_layer_off(self):
         gesture = HoldTapGesture()
         gesture.key(True, 0)
         gesture.sync_layer(True)
-        self.assertEqual(gesture.key(False, 0.1), [])
+        self.assertEqual(gesture.key(False, .1), [])
         self.assertTrue(gesture.layer_active)
-        self.assertEqual(gesture.key(True, 0.2), [])
-        self.assertEqual(gesture.key(False, 0.3), [])
+        self.assertEqual(gesture.key(True, .2), [])
+        self.assertEqual(gesture.key(False, .3), [])
 
     def test_sync_during_confirmed_hold_never_reactivates_until_next_press(self):
         gesture = HoldTapGesture()
@@ -354,19 +425,19 @@ class ExternalLayerSyncTests(unittest.TestCase):
         self.assertEqual(gesture.note_input(), [('held', True)])
         gesture.sync_layer(False)
         self.assertTrue(gesture.held)
-        self.assertEqual(gesture.tick(0.2), [])
+        self.assertEqual(gesture.tick(.2), [])
         self.assertEqual(gesture.note_input(), [])
-        self.assertEqual(gesture.key(False, 0.3), [])
-        gesture.key(True, 0.4)
+        self.assertEqual(gesture.key(False, .3), [])
+        gesture.key(True, .4)
         self.assertEqual(gesture.note_input(), [('held', True)])
 
-    def test_external_change_during_toggle_press_cancels_release_action(self):
+    def test_external_change_during_toggle_press_preserves_visibility_click(self):
         gesture = HoldTapGesture(mode='toggle')
         gesture.key(True, 0)
         gesture.sync_layer(True)
         self.assertTrue(gesture.held)
-        self.assertEqual(gesture.key(False, 1), [])
-        self.assertEqual(gesture.tick(2), [])
+        self.assertEqual(gesture.key(False, .1), [])
+        self.assertEqual(gesture.tick(.4), [('toggle', None)])
         self.assertTrue(gesture.layer_active)
 
     def test_reset_clears_external_layer_in_both_modes(self):

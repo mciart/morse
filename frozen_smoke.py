@@ -114,15 +114,15 @@ def verify_interface_features(window):
         layer_config = Path(window.configManager.config_file).read_bytes()
         assert window.config['pinyin_layer_enabled'] is True
         assert window.config['pinyin_layer_key'] == 'F22'
-        assert window.config['pinyin_layer_mode'] == 'hold'
-        assert window.pinyinToggleRadio.text() == '单击切换'
+        assert window.config['pinyin_layer_mode'] == 'toggle'
+        assert window.pinyinToggleRadio.text() == '双击切换'
         assert not window.pinyinHoldRadio.isHidden() and not window.pinyinToggleRadio.isHidden()
         assert not window.imeSyncCheck.isChecked() and not window.ime_sync.enabled
         assert window.settings_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
-        assert window.selectedPinyinMode() == 'hold'
-        window.pinyinToggleRadio.setChecked(True)
         assert window.selectedPinyinMode() == 'toggle'
         window.pinyinHoldRadio.setChecked(True)
+        assert window.selectedPinyinMode() == 'hold'
+        window.pinyinToggleRadio.setChecked(True)
         view.setPinyinMode(True, window._pinyin_layout)
         try:
             assert view.isPinyinMode() and len(view.crs) == 142

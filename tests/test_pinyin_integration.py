@@ -17,7 +17,10 @@ class PinyinIntegrationTests(unittest.TestCase):
     start_input = mapping.MappingActionTests.start_input
 
     def setUp(self):
-        mapping.MappingActionTests.setUp(self)
+        # These existing engine cases exercise temporary holds explicitly;
+        # the application's first-run default is the separate toggle mode.
+        with patch.dict(morse.DEFAULT_CONFIG, pinyin_layer_mode='hold'):
+            mapping.MappingActionTests.setUp(self)
         self.window.engine_timer.stop()
         self.window.engine = MorseEngine(dict(keylen=3, keyer_mode='manual'))
         self.now = time.monotonic() + 1
@@ -112,20 +115,52 @@ class PinyinIntegrationTests(unittest.TestCase):
         self.window.processMorseKey(2, True, self.now + .2)
         self.assertEqual(self.backend.mock_calls, [call.send('i')])
 
-    def test_toggle_single_commits_before_immediate_morse_and_release_does_not_exit(self):
+    def test_toggle_single_confirms_visibility_before_morse_without_changing_layer(self):
         self.window.layer_gesture = HoldTapGesture(mode='toggle')
+        self.window.config['pinyin_layer_mode'] = 'toggle'
         self.window.processGuideKey(True, self.now)
         self.window.processGuideKey(False, self.now + .04)
         self.assertFalse(self.view.isPinyinMode())
+        self.assertTrue(self.view.isVisible())
         self.now += .08
         self.code('222')
-        self.assertTrue(self.view.isPinyinMode())
-        self.assertEqual(self.backend.mock_calls, [call.send('a')])
+        self.assertFalse(self.view.isVisible())
+        self.assertFalse(self.view.isPinyinMode())
+        self.assertEqual(self.backend.mock_calls, [call.send('o')])
+        # A later double click changes the layer but leaves the guide hidden.
         self.now += 1
         for down, offset in ((True, 0), (False, .04), (True, .1), (False, .15)):
             self.window.processGuideKey(down, self.now + offset)
         self.assertFalse(self.view.isVisible())
         self.assertTrue(self.view.isPinyinMode())
+
+    def test_toggle_double_click_changes_layer_without_visibility_or_geometry_change(self):
+        self.window.layer_gesture = HoldTapGesture(mode='toggle')
+        self.window.config['pinyin_layer_mode'] = 'toggle'
+        original = self.view.geometry()
+        visible = self.view.isVisible()
+        for expected in (True, False):
+            for down, offset in ((True, 0), (False, .04), (True, .1), (False, .14)):
+                self.window.processGuideKey(down, self.now + offset)
+                self.assertEqual(self.view.isVisible(), visible)
+                self.assertEqual(self.view.geometry(), original)
+            self.assertEqual(self.view.isPinyinMode(), expected)
+            self.now += 1
+        self.assertEqual(self.backend.mock_calls, [])
+
+    def test_toggle_single_only_changes_visibility_after_double_click_window(self):
+        self.window.layer_gesture = HoldTapGesture(mode='toggle')
+        self.window.config['pinyin_layer_mode'] = 'toggle'
+        original = self.view.geometry()
+        self.window.processGuideKey(True, self.now)
+        self.window.processGuideKey(False, self.now + .04)
+        self.assertTrue(self.view.isVisible())
+        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + .4))
+        self.assertFalse(self.view.isVisible())
+        self.assertFalse(self.view.isPinyinMode())
+        self.assertFalse(self.window.layer_gesture.layer_active)
+        self.assertEqual(self.view.geometry(), original)
+        self.assertEqual(self.backend.mock_calls, [])
 
     def test_pause_clears_layer_and_blocks_held_key_until_release(self):
         self.window.processGuideKey(True, self.now)
@@ -148,18 +183,17 @@ class PinyinIntegrationTests(unittest.TestCase):
 
     def test_resume_clears_toggle_selected_while_paused(self):
         self.window.layer_gesture = HoldTapGesture(mode='toggle')
+        self.window.config['pinyin_layer_mode'] = 'toggle'
         self.window.stopKeyListener()
-        self.window.processGuideKey(True, self.now)
-        self.window.processGuideKey(False, self.now + .02)
-        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + .4))
+        for down, offset in ((True, 0), (False, .04), (True, .1), (False, .14)):
+            self.window.processGuideKey(down, self.now + offset)
         self.assertTrue(self.window.layer_gesture.layer_active)
         self.assertFalse(self.view.isPinyinMode())
         self.window.startKeyListener()
         self.window.engine_timer.stop()
         self.assertFalse(self.window.layer_gesture.layer_active)
-        self.window.processGuideKey(True, self.now + .5)
-        self.window.processGuideKey(False, self.now + .52)
-        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + .9))
+        for down, offset in ((True, .5), (False, .54), (True, .6), (False, .64)):
+            self.window.processGuideKey(down, self.now + offset)
         self.assertTrue(self.view.isPinyinMode())
 
     def test_rebinding_held_key_does_not_block_first_press_of_new_key(self):

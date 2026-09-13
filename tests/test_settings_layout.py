@@ -76,7 +76,7 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
     def test_responsive_row_stacks_controls_and_restores_horizontal_layout(self):
         window = self.own(QWidget())
         layout = ResponsiveSettingsRow(window)
-        for caption in ('切换方式：', '按住使用', '单击切换'):
+        for caption in ('切换方式：', '按住使用', '双击切换'):
             label = QLabel(caption)
             label.setMinimumWidth(110)
             layout.addWidget(label)

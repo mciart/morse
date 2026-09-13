@@ -30,13 +30,14 @@ def normalize_guide_key(key):
 
 
 class HoldTapGesture:
-    """Interpret one key as a temporary or latched layer plus guide double-tap.
+    """Interpret one key as a temporary layer or single/double-click actions.
 
     ``held`` always describes the physical key; ``layer_active`` describes the
     input layer in either mode. Hold mode emits ``held`` layer events only
     after its recognition threshold or the first Morse input, so short taps
-    never flash the layer. Toggle mode emits ``layer`` events; its short
-    single tap waits for the double-tap deadline before changing the layer.
+    never flash the layer; a double tap toggles guide visibility. In toggle
+    mode a double tap emits one ``layer`` event, while a short single tap
+    waits for the double-tap deadline before toggling guide visibility.
     ``toggle`` always means guide visibility, never the input layer.
     """
 
@@ -119,12 +120,11 @@ class HoldTapGesture:
         if duration <= self.tap_seconds:
             if self._pending_single is not None:
                 self._pending_single = None
-                events.append(('toggle', None))
+                events.extend(self._switch_layer())
             else:
                 self._pending_single = at + self.gap_seconds
-        else:
-            self._pending_single = None
-            events.extend(self._switch_layer())
+        # A long press has no action of its own. If a preceding short click
+        # still awaits its deadline, preserve that independent visibility click.
         return events
 
     def tick(self, at):
@@ -140,17 +140,21 @@ class HoldTapGesture:
         if (self.mode == 'toggle' and self._pending_single is not None and
                 at >= self._pending_single):
             self._pending_single = None
-            return self._switch_layer()
+            return [('toggle', None)]
         return []
 
     def note_input(self):
-        """Resolve the input layer before Morse input and cancel guide taps."""
+        """Confirm a hold or pending visibility click before Morse input.
+
+        Morse input consumes the click sequence, so it cannot also complete
+        a double click or switch the latched layer.
+        """
         events = []
         if self.mode == 'hold' and self.held and not self._hold_active:
             events = self._activate_hold()
         if self.mode == 'toggle' and self._pending_single is not None:
             self._pending_single = None
-            events = self._switch_layer()
+            events = [('toggle', None)]
         self._last_tap_at = None
         if self.held:
             self._used = True
@@ -159,15 +163,18 @@ class HoldTapGesture:
     def sync_layer(self, enabled):
         """Silently adopt an externally observed input layer, with no echo.
 
-        Unchanged observations preserve pending taps. A real change discards
-        pending click gestures, while preserving the physical key and its
-        hold deadline. A confirmed hold still returns to English on release;
-        an unconfirmed short press never forces an external layer back off.
+        Toggle-mode clicks survive external changes: the pending single click
+        concerns only visibility, and a double click flips the latest observed
+        layer. Hold mode retains its cancellation behavior on a real external
+        change. A confirmed hold still returns to English on release; an
+        unconfirmed short press never forces an external layer back off.
         """
         enabled = bool(enabled)
         if enabled == self.layer_active:
             return []
         self.layer_active = enabled
+        if self.mode == 'toggle':
+            return []
         self._last_tap_at = None
         self._pending_single = None
         if self.held:
