@@ -128,7 +128,7 @@ def verify_installation(window, report_path):
             window.init()
             view = window.codeslayoutview
             assert len(view.crs) == 130, 'Missing guide actions'
-            assert window.config['code_profile'] == 'morsey', 'Fresh installs must use international-first codes'
+            assert set(window.layoutManager.layouts) == {'desktop'}, 'Retired layout pages remain'
             for code, action in (('21121', 'FSLASH'), ('1112112', 'DOLLAR'),
                                  ('1111111', 'BACKTICK'), ('1221121', 'DELETE')):
                 assert view.crs[code].item['action'] == action, 'Guide profile does not match dispatch'
@@ -142,6 +142,7 @@ def verify_installation(window, report_path):
             assert (data_directory / 'layouts.json').is_file()
             assert 'pressagio' not in sys.modules, 'Removed prediction engine was loaded'
             assert not (data_directory / 'morsewriter.sqlite').exists(), 'Fresh installs must not create a word database'
+            assert not (data_directory / 'abbreviations_en.txt').exists(), 'Retired abbreviation resource was created'
             if getattr(sys, 'frozen', False):
                 assert importlib.util.find_spec('pressagio') is None, 'Removed engine is still bundled'
                 assert not source_resource('defaults', 'morsewriter.sqlite').exists()

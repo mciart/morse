@@ -70,20 +70,19 @@ class WindowBehaviorTests(unittest.TestCase):
         return view, self.window.listenerThread
 
     def add_pending_input(self):
-        self.window.currentCharacter = [1, 2]
-        self.window.lastKeyDownTime = 123
+        self.window.engine = morse.MorseEngine({'keylen': 3, 'keyer_mode': 'manual'})
+        now = morse.time.monotonic()
+        for role in (0, 1):
+            for down in (True, False):
+                self.window.handle_key_event(('space', 'enter')[role], down, role, now)
+                now += .005
+        self.assertEqual(self.window.engine.symbols, [1, 2])
         self.window.repeaton = True
-        self.window.startEndCharacterTimer()
-        for name in ("fast_morse_mode_timer", "repeat_character_timer"):
-            timer = morse.QTimer(self.window)
-            timer.start(60000)
-            setattr(self.window, name, timer)
-        return [getattr(self.window, name) for name in (
-            "endCharacterTimer", "fast_morse_mode_timer", "repeat_character_timer",
-        )]
+        return [self.window.engine_timer]
 
-    def test_default_international_guide_and_saved_legacy_selection_agree_with_dispatch(self):
-        self.assertEqual(self.window.codeProfileComboBox.currentText(), '国际摩斯优先')
+    def test_only_international_guide_remains_and_agrees_with_dispatch(self):
+        self.assertFalse(hasattr(self.window, 'codeProfileComboBox'))
+        self.assertEqual(set(self.window.layoutManager.layouts), {'desktop'})
         view, _ = self.start_input()
         self.assertEqual(len(view.crs), 130)
         for code, action in (('21121', 'FSLASH'), ('1112112', 'DOLLAR'),
@@ -95,32 +94,6 @@ class WindowBehaviorTests(unittest.TestCase):
         backtick = view.keystroke_crs_map['BACKTICK']
         self.assertEqual(backtick.character.text(), '`')
         self.assertLess(backtick.x(), view.keystroke_crs_map['ONE'].x())
-        self.window.backToSettings()
-        selector = self.window.codeProfileComboBox
-        selector.setCurrentIndex(selector.findData('legacy'))
-        self.window.saveSettings()
-        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
-        self.assertEqual(saved['code_profile'], 'legacy')
-        self.window.GOButton.click()
-        self.app.processEvents()
-        view = self.window.codeslayoutview
-        self.views.append(view)
-        self.assertEqual(len(view.crs), 129)
-        self.assertEqual(view.crs['21121'].item['action'], 'DELETE')
-        self.assertNotIn('BACKTICK', view.keystroke_crs_map)
-
-    def test_conflicting_custom_profile_falls_back_with_visible_explanation(self):
-        layout = self.window.layoutManager
-        layout.set_code_profile('legacy')
-        layout._raw_layouts['desktop']['items'].append({'action': 'F13', 'code': '1221121'})
-        with patch.object(morse.QMessageBox, 'warning') as warning:
-            view, _ = self.start_input()
-        warning.assert_called_once()
-        self.assertIn('重复编码', warning.call_args.args[2])
-        self.assertEqual(self.window.codeProfileComboBox.currentData(), 'legacy')
-        self.assertEqual(layout.code_profile, 'legacy')
-        self.assertEqual(self.window.config['code_profile'], 'legacy')
-        self.assertEqual(view.crs['21121'].item['action'], 'DELETE')
 
     def test_settings_close_hides_to_tray_and_restores_without_stopping(self):
         with patch.object(self.window, "stopIt", wraps=self.window.stopIt) as stop:
@@ -140,6 +113,37 @@ class WindowBehaviorTests(unittest.TestCase):
             stop.assert_not_called()
             self.quit_app.assert_not_called()
 
+    def test_old_layout_preferences_are_discarded_without_changing_input_preferences(self):
+        settings = dict(morse.DEFAULT_CONFIG, code_profile='legacy', guide_layout='mouse',
+                        SoundDit='old.wav', withdebug=True, keyone='F23', theme='dark',
+                        guide_positions={'compact': {'x': 80, 'y': 90}})
+        path = Path(self.enterContext(TemporaryDirectory())) / 'config.json'
+        source = json.dumps(settings)
+        path.write_text(source, encoding='utf-8')
+        loaded = morse.ConfigManager(str(path)).get_config()
+        for key in ('code_profile', 'guide_layout', 'SoundDit', 'withdebug'):
+            self.assertNotIn(key, loaded)
+        for key in ('keyone', 'theme', 'guide_positions'):
+            self.assertEqual(loaded[key], settings[key])
+        self.assertEqual(path.read_text(encoding='utf-8'), source)
+
+    def test_conflicting_old_layout_uses_current_guide_and_explains_once(self):
+        path = Path(self.enterContext(TemporaryDirectory())) / 'layouts.json'
+        data = {'layouts': {'desktop': {'items': [
+            {'action': 'A', 'code': '12'}, {'action': 'UNKNOWN', 'code': '12'}]}}}
+        source = json.dumps(data)
+        path.write_text(source, encoding='utf-8')
+        with self.assertLogs(level='WARNING'):
+            layout = morse.LayoutManager(str(path))
+        self.window.layoutManager = layout
+        layout.set_actions(self.window.actions)
+        with patch.object(morse.QMessageBox, 'warning') as warning:
+            view, _ = self.start_input()
+        warning.assert_called_once()
+        self.assertEqual(len(view.crs), 130)
+        self.assertIsNone(layout.layout_warning)
+        self.assertEqual(path.read_text(encoding='utf-8'), source)
+
     def test_chinese_choices_keep_config_identifiers_when_starting(self):
         for box, label, identifier in (
             (self.window.iconComboBoxKeyOne, "空格", "SPACE"),
@@ -149,7 +153,7 @@ class WindowBehaviorTests(unittest.TestCase):
             self.assertEqual(box.currentText(), label)
             self.assertEqual(box.currentData(), identifier)
         collected = self.window.collect_config()
-        for key in ("keyone", "keytwo", "keythree", "SoundDit", "SoundDah", "SoundTyping", "winxaxis", "winyaxis"):
+        for key in ("keyone", "keytwo", "keythree", "tone_frequency", "tone_volume"):
             self.assertEqual(collected[key], morse.DEFAULT_CONFIG[key])
 
         self.start_input()
@@ -298,10 +302,8 @@ class WindowBehaviorTests(unittest.TestCase):
         self.assertFalse(listener.keep_running)
         self.assertIsNone(self.window.listenerThread)
         self.assertTrue(all(not timer.isActive() for timer in timers))
-        for name in ("endCharacterTimer", "fast_morse_mode_timer", "repeat_character_timer"):
-            self.assertIsNone(getattr(self.window, name))
         self.assertEqual(self.window.currentCharacter, [])
-        self.assertIsNone(self.window.lastKeyDownTime)
+        self.assertEqual(self.window.engine.symbols, [])
         self.assertFalse(self.window.repeaton)
         self.assertIsNone(self.window.codeslayoutview)
         self.assertFalse(view.isVisible())

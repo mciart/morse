@@ -19,7 +19,6 @@ BOOTSTRAP_MARKER = ".bootstrap-complete"
 _SOURCE_ROOT = Path(__file__).resolve().parent
 _SOURCE_SEEDS = {
     "layouts.json": "user_data/layouts.json",
-    "abbreviations_en.txt": "user_data/abbreviations_en.txt",
 }
 
 
@@ -53,6 +52,11 @@ def _seed_resource(name, resource_dir=None):
     root = Path(resource_dir) if resource_dir is not None else source_resource()
     release_seed = root / "defaults" / name
     return release_seed if release_seed.is_file() else root / _SOURCE_SEEDS[name]
+
+
+def layouts_seed_path():
+    """The current unified layout shipped with this version."""
+    return _seed_resource('layouts.json')
 
 
 def _copy_missing(source, target):
@@ -115,25 +119,12 @@ def _legacy_preferences(directory, defaults):
         return None
 
 
-def _migrate_abbreviations(directory, target):
-    source = directory / "abbreviations_en.txt"
-    try:
-        if source.stat().st_size > 256 * 1024:
-            return
-        text = source.read_text(encoding="utf-8-sig")
-        if all(not line.strip() or "\t" in line for line in text.splitlines()):
-            _write_missing(target, text)
-    except (OSError, UnicodeError):
-        # A missing or malformed optional abbreviation file is not fatal.
-        return
-
-
 def bootstrap_assets(default_config, *, data_dir=None, resource_dir=None, legacy_dir=None):
     """Seed missing assets and return the writable data directory.
 
     Legacy migration is attempted only once, when the new config is absent.
-    Only bounded scalar preferences and a small text abbreviation file migrate;
-    old layouts, databases, logs and arbitrary extra files do not migrate.
+    Only bounded scalar preferences migrate; old layouts, abbreviation files,
+    databases, logs and arbitrary extra files do not migrate.
     """
     directory = Path(data_dir) if data_dir is not None else user_data_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -145,9 +136,6 @@ def bootstrap_assets(default_config, *, data_dir=None, resource_dir=None, legacy
 
     # Ensure all mandatory data before publishing a first-run config/marker.
     _copy_missing(_seed_resource("layouts.json", resource_dir), directory / "layouts.json")
-    if migrated is not None:
-        _migrate_abbreviations(legacy, directory / "abbreviations_en.txt")
-    _copy_missing(_seed_resource("abbreviations_en.txt", resource_dir), directory / "abbreviations_en.txt")
 
     # Keep legacy omissions (e.g. keyer_mode) intact for ConfigManager's existing
     # version conversion. Fresh installs use the explicit release defaults.

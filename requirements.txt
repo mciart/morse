@@ -1,5 +1,4 @@
 PyQt5
 keyboard
 mouse
-nava  
 pyinstaller

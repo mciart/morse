@@ -49,33 +49,6 @@ class KeyboardOutputTests(unittest.TestCase):
             call.send("e"), call.send("n"), call.send("d"), call.send("space"),
         ])
 
-    def test_send_text_preserves_case_unicode_punctuation_and_whitespace(self):
-        text = "I know 中文 café🙂: +2!\tNext\nline\rend "
-        self.assertEqual(self.output.send_text(text), text)
-        self.assertEqual(self.backend.mock_calls, [call.write(text, exact=True)])
-
-    def test_send_text_ends_modifier_lock_before_writing(self):
-        self.output.toggle_lock_mode()
-        self.output.send("ctrl", modifier=True)
-        self.output.send("shift", modifier=True)
-        self.backend.reset_mock()
-        self.assertEqual(self.output.send_text("Hello! "), "Hello! ")
-        self.assertFalse(self.output.lock_mode)
-        self.assertEqual(self.output.held_modifiers, ())
-        self.assertEqual(self.backend.mock_calls, [call.release("shift"), call.release("ctrl"),
-                                                call.write("Hello! ", exact=True)])
-
-    def test_send_text_failure_leaves_no_owned_modifiers_or_lock(self):
-        self.output.toggle_lock_mode()
-        self.output.send("ctrl", modifier=True)
-        self.backend.write.side_effect = RuntimeError("text failed")
-        with self.assertRaisesRegex(RuntimeError, "text failed"):
-            self.output.send_text("Hello! ")
-        self.assertFalse(self.output.lock_mode)
-        self.assertEqual(self.output.held_modifiers, ())
-        self.backend.release.assert_called_once_with("ctrl")
-        self.backend.send.assert_not_called()
-
     def test_windows_key_is_not_omitted_when_ctrl_is_held(self):
         self.output.send("ctrl", modifier=True)
         self.assertIsNone(self.output.send("windows"))

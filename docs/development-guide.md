@@ -17,7 +17,7 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-码表由 `user_data/layouts.json` 的原始布局、`morse_profiles.py` 的编码方案转换和 `MorseCodeGUI.py` 的动作定义共同生成，与运行时使用相同转换。默认“国际摩斯优先”和“旧版专用”分别列出，原始布局文件不因切换方案而被重写。修改映射后先执行 `tools/generate_codechart.py`，再检查生成结果。测试使用模拟键鼠和音频，不能替代实际设备延迟或游戏兼容性验证。
+码表由 `user_data/layouts.json` 的统一布局、`morse_profiles.py` 的标准化处理和 `MorseCodeGUI.py` 的动作定义共同生成，与运行时使用相同处理。只有统一的 `desktop` 页；旧用户布局在内存中迁移，不覆盖原文件。修改映射后先执行 `tools/generate_codechart.py`，再检查生成结果。测试使用模拟键鼠和音频，不能替代实际设备延迟或游戏兼容性验证。
 
 在 Windows 桌面上额外检查精简码表的真实显示与缩放：
 

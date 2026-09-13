@@ -68,7 +68,6 @@ class WindowHandleStub(QObject):
 class GuideScreenTests(TestCase):
     setUpClass = classmethod(guide.UnifiedGuideTests.setUpClass.__func__)
     start_input = guide.UnifiedGuideTests.start_input
-    select_page = guide.UnifiedGuideTests.select_page
     enter_code = guide.UnifiedGuideTests.enter_code
     tearDown = guide.UnifiedGuideTests.tearDown
     assert_compact_board_fits = guide.UnifiedGuideTests.assert_compact_board_fits

@@ -2,7 +2,6 @@
   "schema_version": 1,
   "resources": [
     {"source": "user_data/layouts.json", "target": "defaults/layouts.json"},
-    {"source": "user_data/abbreviations_en.txt", "target": "defaults/abbreviations_en.txt"},
     {"source": "version", "target": "version"},
     {"source": "LICENSE", "target": "LICENSE"}
   ]

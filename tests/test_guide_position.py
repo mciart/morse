@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PyQt5.QtCore import QEvent, QPoint, QRect
 from PyQt5.QtTest import QTest
@@ -141,6 +141,7 @@ class GuidePositionTests(TestCase):
         full = QPoint(view.pos())
         view.flushPosition()
         view.setCompactMode(True)
+        self.drain()  # Deliver the new QWindow geometry before the next user move.
         view.move(650, 450)
         compact = QPoint(view.pos())
         view.flushPosition()
@@ -160,6 +161,7 @@ class GuidePositionTests(TestCase):
         full = QPoint(view.pos())
         view.flushPosition()
         view.setCompactMode(True)
+        self.drain()
         view.move(640, 430)
         compact = QPoint(view.pos())
         view.flushPosition()
@@ -169,6 +171,37 @@ class GuidePositionTests(TestCase):
             view.setCompactMode(mode)
             self.drain()
             self.assertEqual(view.pos(), expected)
+
+    def test_restore_uses_current_platform_frame_when_widget_position_is_stale(self):
+        view = self.start_input()
+        view.setCompactMode(True)
+        self.drain()
+        expected = QPoint(640, 430)
+        native = {'position': QPoint(643, 515)}  # Old 300%-DPI title-bar offset.
+        handle = Mock()
+        handle.framePosition.side_effect = lambda: QPoint(native['position'])
+        handle.frameGeometry.side_effect = lambda: QRect(native['position'], view.size())
+        handle.setFramePosition.side_effect = lambda point: native.update(position=QPoint(point))
+        view._positions['compact'] = dict(x=640, y=430, screen=self.primary.name(),
+                                          available=[0, 0, 2200, 1400])
+        with patch.object(view, '_positionWindow', return_value=handle), \
+                patch.object(view, 'pos', return_value=expected), \
+                patch.object(view, 'move', side_effect=AssertionError('Used stale QWidget frame margins')):
+            view._restorePosition()
+        self.assertEqual(native['position'], expected)
+        handle.setFramePosition.assert_any_call(expected)
+
+    def test_saved_position_uses_actual_frame_instead_of_cached_widget_position(self):
+        view = self.start_input()
+        actual = QPoint(450, 310)
+        handle = Mock()
+        handle.framePosition.return_value = actual
+        handle.frameGeometry.side_effect = lambda: QRect(actual, view.size())
+        with patch.object(view, '_positionWindow', return_value=handle), \
+                patch.object(view, 'pos', return_value=QPoint(432, 225)):
+            view._rememberPosition()
+            view.flushPosition()
+        self.assert_saved_at('full', actual)
 
     def test_moves_are_debounced_into_one_saved_position(self):
         view = self.start_input()

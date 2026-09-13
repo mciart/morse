@@ -1,4 +1,4 @@
-"""Fixed Morsey character examples and safe profile/action transitions."""
+"""International character examples and safe migration to the unified layout."""
 
 from copy import deepcopy
 import json
@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, call
 
 from morse_engine import MorseEngine
-from morse_profiles import apply_code_profile, normalize_code_profile
+from morse_profiles import normalize_layouts
 from tools.generate_codechart import read_key_data
 
 
@@ -42,7 +42,7 @@ class MorseProfileTests(unittest.TestCase):
         cls.key_data = read_key_data(PROJECT / 'MorseCodeGUI.py')
 
     def test_all_54_characters_and_six_extensions_are_unique(self):
-        desktop = apply_code_profile(self.raw)['desktop']['items']
+        desktop = normalize_layouts(self.raw)['desktop']['items']
         codes = {item['code']: item for item in desktop}
         self.assertEqual(len(desktop), 130)
         self.assertEqual(len(codes), 130)
@@ -56,22 +56,48 @@ class MorseProfileTests(unittest.TestCase):
             self.assertEqual(len(code), 7)
             self.assertTrue(code.startswith('1'))
 
-    def test_legacy_and_other_pages_remain_exact_and_input_is_never_mutated(self):
-        original = deepcopy(self.raw)
-        self.assertEqual(apply_code_profile(self.raw, 'legacy'), original)
-        transformed = apply_code_profile(self.raw, 'morsey')
-        self.assertEqual(self.raw, original)
-        for name in self.raw:
-            if name != 'desktop':
-                self.assertEqual(transformed[name], original[name])
-        for old, new in zip(original['desktop']['items'], transformed['desktop']['items']):
-            if old['action'].startswith('MOUSE'):
-                self.assertEqual(new, old)
+    def test_old_pages_and_commands_retire_without_mutating_user_data(self):
+        old = deepcopy(self.raw)
+        old['typing'] = {'items': [{'action': 'ONE', 'code': '1'}]}
+        old['desktop']['supports_prediction'] = True
+        old['desktop']['column_len'] = 15
+        old['desktop']['items'] += [
+            {'action': 'PREDICTION_SELECT', 'code': '1', 'index': 0},
+            {'action': 'CHANGELAYOUT', 'code': '1', 'target': 'typing'},
+            {'action': 'CODESET', 'code': '1'}, {'emptyspace': True},
+        ]
+        old['desktop']['items'][0]['label'] = '自定义标签'
+        original = deepcopy(old)
+        transformed = normalize_layouts(old)
+        self.assertEqual(old, original)
+        self.assertEqual(list(transformed), ['desktop'])
+        self.assertEqual(len(transformed['desktop']['items']), 130)
+        self.assertEqual(transformed['desktop']['items'][0]['label'], '自定义标签')
+        self.assertNotIn('supports_prediction', transformed['desktop'])
+        self.assertNotIn('column_len', transformed['desktop'])
         transformed['desktop']['items'][0]['label'] = 'runtime only'
-        self.assertEqual(self.raw, original)
+        self.assertEqual(old, original)
+
+    def test_old_desktop_codes_upgrade_in_one_pass_and_remain_idempotent(self):
+        old_codes = {'F9': '122221', 'DELETE': '21121', 'TAB': '21221',
+                     'STAR': '12111', 'REPEATMODE': '121121', 'PERCENT': '122121',
+                     'SINGLEQUOTE': '121221', 'EXCLAMATION': '121122', 'FSLASH': '22112',
+                     'OPENBRACKET': '111221', 'CLOSEBRACKET': '211221', 'AMPERSAND': '21122',
+                     'COLON': '212121', 'SEMICOLON': '11121', 'EQUALS': '12212',
+                     'PLUS': '12211', 'MINUS': '2221', 'UNDERSCORE': '11221',
+                     'DOUBLEQUOTE': '22122', 'AT': '12221', 'DOLLAR': '211121'}
+        old = deepcopy(self.raw)
+        old['desktop']['items'] = [item for item in old['desktop']['items'] if item['action'] != 'BACKTICK']
+        for item in old['desktop']['items']:
+            item['code'] = old_codes.get(item['action'], item['code'])
+        original = deepcopy(old)
+        transformed = normalize_layouts(old)
+        self.assertEqual(transformed, normalize_layouts(self.raw))
+        self.assertEqual(normalize_layouts(transformed), transformed)
+        self.assertEqual(old, original)
 
     def test_old_conflicting_codes_are_not_aliases_for_dangerous_extensions(self):
-        items = apply_code_profile(self.raw)['desktop']['items']
+        items = normalize_layouts(self.raw)['desktop']['items']
         actual = {item['code']: item['action'] for item in items}
         for pattern, action in (('-..-.', 'FSLASH'), ('.-..-.', 'DOUBLEQUOTE'),
                                 ('-.--.', 'OPENBRACKET'), ('.----.', 'SINGLEQUOTE'),
@@ -85,27 +111,40 @@ class MorseProfileTests(unittest.TestCase):
         custom['desktop']['items'].append({'action': 'CUSTOM', 'code': EXTENSIONS['TAB']})
         before = deepcopy(custom)
         with self.assertRaisesRegex(ValueError, '重复编码'):
-            apply_code_profile(custom)
+            normalize_layouts(custom)
         self.assertEqual(custom, before)
-        self.assertEqual(apply_code_profile(custom, 'legacy'), before)
 
-    def test_missing_desktop_and_unknown_profile_have_predictable_defaults(self):
-        self.assertEqual(normalize_code_profile('legacy'), 'legacy')
-        for value in (None, '', 'obsolete'):
-            self.assertEqual(normalize_code_profile(value), 'morsey')
-        self.assertEqual(apply_code_profile({'typing': self.raw['typing']}),
-                         {'typing': self.raw['typing']})
+    def test_pre_desktop_file_uses_bundled_template_without_retired_pages(self):
+        old = {'typing': {'items': [{'action': 'ONE', 'code': '1'}]}}
+        original = deepcopy(old)
+        self.assertEqual(normalize_layouts(old, self.raw['desktop']), self.raw)
+        self.assertEqual(old, original)
+        with self.assertRaisesRegex(ValueError, '缺少统一码表'):
+            normalize_layouts(old)
 
-    def test_backtick_is_a_single_nonstandard_extension_and_legacy_has_no_new_item(self):
-        transformed = apply_code_profile(self.raw)
+    def test_backtick_is_a_single_nonstandard_extension(self):
+        transformed = normalize_layouts(self.raw)
         backticks = [item for item in transformed['desktop']['items'] if item['action'] == 'BACKTICK']
         self.assertEqual(backticks, [{'action': 'BACKTICK', 'code': '1111111'}])
-        self.assertEqual(apply_code_profile(transformed), transformed)
-        self.assertFalse(any(item['action'] == 'BACKTICK'
-                             for item in apply_code_profile(self.raw, 'legacy')['desktop']['items']))
+        self.assertEqual(normalize_layouts(transformed), transformed)
+
+    def test_missing_actions_are_filled_without_replacing_custom_parameters(self):
+        partial = {'desktop': {'items': [{'action': 'A', 'code': '12', 'label': '我的 A'}]}}
+        transformed = normalize_layouts(partial, self.raw['desktop'])['desktop']['items']
+        self.assertEqual(len(transformed), 130)
+        self.assertEqual(transformed[0], partial['desktop']['items'][0])
+        self.assertEqual(len(partial['desktop']['items']), 1)
+
+    def test_invalid_codes_are_rejected(self):
+        for invalid in ('', 'dot', 123, None):
+            with self.subTest(code=invalid):
+                custom = deepcopy(self.raw)
+                custom['desktop']['items'].append({'action': 'CUSTOM', 'code': invalid})
+                with self.assertRaisesRegex(ValueError, '无效编码'):
+                    normalize_layouts(custom)
 
 
-class ProfileActionTests(unittest.TestCase):
+class UnifiedActionTests(unittest.TestCase):
     """Use actual timing and action dispatch, with a mock OS output boundary."""
 
     setUpClass = classmethod(MorseProfileTests.setUpClass.__func__)
@@ -117,9 +156,8 @@ class ProfileActionTests(unittest.TestCase):
         self.morse = morse
         self.backend = Mock(spec=['press', 'release', 'send', 'write'])
         self.layout = morse.LayoutManager(str(PROJECT / 'user_data/layouts.json'))
-        self.window = SimpleNamespace(key_output=KeyboardOutput(backend=self.backend), typestate=None,
-            layoutManager=self.layout, enableRepeatMode=Mock(), changeLayout=Mock(),
-            toggleSound=Mock(), cycleLayout=Mock())
+        self.window = SimpleNamespace(key_output=KeyboardOutput(backend=self.backend),
+            layoutManager=self.layout, enableRepeatMode=Mock(), toggleSound=Mock())
         manager = morse.ConfigManager.__new__(morse.ConfigManager)
         manager.key_data = self.key_data
         self.actions = manager.initActions(self.window)
@@ -172,41 +210,24 @@ class ProfileActionTests(unittest.TestCase):
         self.perform_code('1111111')
         self.assertEqual(self.backend.mock_calls, [call.write('`', exact=True)])
 
-    def test_switching_profiles_rebinds_actions_without_copying_live_objects(self):
-        class UncopyableAction:
-            def __deepcopy__(self, memo):
-                raise AssertionError('Runtime action copied')
-
-        raw_bytes = Path(self.layout.layout_file).read_bytes()
-        self.layout.layouts['desktop']['items'][0]['_action'] = UncopyableAction()
-        self.assertTrue(self.layout.set_code_profile('legacy'))
-        legacy = self.layout.layouts['desktop']['items']
-        self.assertEqual(next(item['code'] for item in legacy if item['action'] == 'DELETE'), '21121')
-        self.assertTrue(all('_action' in item for item in legacy))
-        self.assertTrue(self.layout.set_code_profile('morsey'))
-        current = self.layout.layouts['desktop']['items']
-        action = current[0]['_action']
-        self.assertFalse(self.layout.set_code_profile('morsey'))
-        self.assertIs(self.layout.layouts['desktop']['items'][0]['_action'], action)
-        self.assertEqual(Path(self.layout.layout_file).read_bytes(), raw_bytes)
-        self.assertTrue(all('_action' not in item for item in self.layout._raw_layouts['desktop']['items']))
-
-    def test_custom_profile_collision_falls_back_and_rejected_switch_is_atomic(self):
-        custom = deepcopy(self.raw)
-        custom['desktop']['items'].append({'action': 'CUSTOM', 'code': EXTENSIONS['TAB']})
+    def test_old_file_loads_as_unified_desktop_without_rewriting_it(self):
+        old = deepcopy(self.raw)
+        old['typing'] = {'items': [{'action': 'ONE', 'code': '1'}]}
+        old['desktop']['items'] = [item for item in old['desktop']['items'] if item['action'] != 'BACKTICK']
+        for item in old['desktop']['items']:
+            if item['action'] == 'DELETE':
+                item['code'] = '21121'
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'layouts.json'
-            raw_bytes = json.dumps({'layouts': custom, 'mainlayout': 'desktop'}).encode('utf-8')
+            raw_bytes = json.dumps({'layouts': old, 'mainlayout': 'typing'}).encode('utf-8')
             path.write_bytes(raw_bytes)
-            with self.assertLogs(level='WARNING'):
-                layout = self.morse.LayoutManager(str(path))
-            self.assertEqual(layout.code_profile, 'legacy')
-            self.assertIn('重复编码', layout.profile_error)
-            old_layouts = layout.layouts
-            with self.assertRaisesRegex(ValueError, '重复编码'):
-                layout.set_code_profile('morsey')
-            self.assertIs(layout.layouts, old_layouts)
-            self.assertEqual(layout.code_profile, 'legacy')
+            layout = self.morse.LayoutManager(str(path))
+            layout.set_actions(self.actions)
+            self.assertEqual(list(layout.layouts), ['desktop'])
+            items = layout.get_active_layout()['items']
+            self.assertEqual(len(items), 130)
+            self.assertEqual(next(item['code'] for item in items if item['action'] == 'DELETE'), EXTENSIONS['DELETE'])
+            self.assertTrue(all(item.get('_action') is not None for item in items))
             self.assertEqual(path.read_bytes(), raw_bytes)
 
 

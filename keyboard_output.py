@@ -1,7 +1,7 @@
 """Morse keyboard output with owned, sticky modifier state.
 
 No hooks or global key-state queries are installed here. Returned text describes
-the generated action for prediction; external Caps Lock changes, keyboard
+the generated action; external Caps Lock changes, keyboard
 layouts and input methods can still change what the receiving application sees.
 """
 
@@ -122,21 +122,12 @@ class KeyboardOutput:
             for key in modifiers:
                 self.backend.press(key)
 
-    def send_text(self, text: str) -> str:
-        """Insert prediction or expansion text exactly, ending modifier lock."""
-        try:
-            self.reset()
-            self.backend.write(text, exact=True)
-            return text
-        finally:
-            self.reset()
-
     def send(self, key, character=None, modifier=False) -> str | None:
         """Send an action, consuming one-shot modifiers after a normal key.
 
         Modifier actions toggle a held key. Lock mode retains them across normal
         keys, and does not repeat a previous action. Character metadata is used
-        for exact punctuation output and to update the caller's prediction text.
+        for exact punctuation output and to describe the generated character.
         """
         if modifier:
             self._toggle_modifier(key)

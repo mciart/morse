@@ -18,29 +18,25 @@ class CodeChartTests(unittest.TestCase):
         cls.layouts = json.loads((PROJECT / "user_data" / "layouts.json").read_text(encoding="utf-8"))
         cls.key_data = read_key_data(PROJECT / "MorseCodeGUI.py")
 
-    def test_committed_chart_matches_all_runtime_pages(self):
+    def test_committed_chart_matches_the_single_runtime_layout(self):
         expected = render_chart(self.layouts, self.key_data)
         self.assertEqual((PROJECT / "codechart.md").read_text(encoding="utf-8"), expected)
-        self.assertIn("## 键盘与鼠标（默认）", expected)
-        for page in ("主键盘", "字母", "鼠标", "数字"):
-            self.assertIn(f"## {page}\n", expected)
-        self.assertNotIn("候选", expected)
-        self.assertIn("本页共 129 项", expected)
-        self.assertIn("本页共 130 项", expected)
-        self.assertIn("## 统一面板：旧版专用", expected)
+        self.assertIn("## 键盘与鼠标\n", expected)
+        for page in ("主键盘", "字母", "鼠标", "数字", "统一面板：旧版专用"):
+            self.assertNotIn(f"## {page}\n", expected)
+        self.assertIn("共 130 项", expected)
+        self.assertEqual(set(self.layouts['layouts']), {'desktop'})
         self.assertIn("dc120423abd6f211548ad5f60eba2f496fa680bf", expected)
 
-    def test_standard_and_legacy_sections_use_their_actual_distinct_codes(self):
+    def test_standard_characters_and_software_extensions_match_actual_codes(self):
         chart = render_chart(self.layouts, self.key_data)
-        standard, rest = chart.split('## 统一面板：旧版专用', 1)
-        legacy = rest.split('## ', 1)[0]
-        self.assertIn('| / | `—••—•` |', standard)
-        self.assertIn('| 删除 | `•——••—•` |', standard)
-        self.assertIn('| $ | `•••—••—` |', standard)
-        self.assertIn('| \\` | `•••••••` |', standard)
-        self.assertIn('| / | `——••—` |', legacy)
-        self.assertIn('| 删除 | `—••—•` |', legacy)
-        self.assertIn('| $ | `—•••—•` |', legacy)
+        self.assertIn('| / | `—••—•` |', chart)
+        self.assertIn('| 删除 | `•——••—•` |', chart)
+        self.assertIn('| $ | `•••—••—` |', chart)
+        self.assertIn('| \\` | `•••••••` |', chart)
+        self.assertNotIn('| / | `——••—` |', chart)
+        self.assertNotIn('| 删除 | `—••—•` |', chart)
+        self.assertNotIn('| $ | `—•••—•` |', chart)
 
     def test_layout_specific_codes_and_source_labels_are_preserved(self):
         layouts = deepcopy(self.layouts)
@@ -49,14 +45,14 @@ class CodeChartTests(unittest.TestCase):
         chart = render_chart(layouts, key_data)
         self.assertIn("| 测试字母 | `•—` |", chart)
         self.assertIn("| 1 | `•————` |", chart)
-        self.assertIn("| 1 | `•` |", chart)
+        self.assertNotIn("| 1 | `•` |", chart)
         self.assertIn("| 左向Tab | `——•—••` |", chart)
         self.assertIn("| 开始菜单 | `——••••` |", chart)
         self.assertIn("| 应用菜单 | `—•••——` |", chart)
 
     def test_conflicting_codes_and_missing_actions_fail_generation(self):
         layouts = deepcopy(self.layouts)
-        entries = layouts["layouts"]["main"]["items"]
+        entries = layouts["layouts"]["desktop"]["items"]
         entries.append(dict(entries[0]))
         with self.assertRaisesRegex(ValueError, "重复编码"):
             render_chart(layouts, self.key_data)

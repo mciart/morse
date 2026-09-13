@@ -70,7 +70,7 @@ def check_native(report, save_images=False):
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication, QWidget
     from tools.generate_codechart import read_key_data
-    from morse_profiles import apply_code_profile
+    from morse_profiles import normalize_layouts
     from ui_theme import ThemeManager
     from virtual_keyboard import VirtualKeyboardView
     from windows_integration import show_guide_without_activation
@@ -282,7 +282,7 @@ def check_native(report, save_images=False):
             result['owned_foreground_test'] = dict(status='unavailable',
                 reason='Windows did not grant foreground to the owned test backdrop')
         layouts = json.loads((ROOT / 'user_data/layouts.json').read_text(encoding='utf-8-sig'))['layouts']
-        layout = apply_code_profile(layouts, 'morsey')['desktop']
+        layout = normalize_layouts(layouts)['desktop']
         labels = read_key_data(ROOT / 'MorseCodeGUI.py')
         for item in layout['items']:
             item['label'] = item.get('label', labels.get(item['action'], {}).get('label', item['action']))
@@ -340,14 +340,25 @@ def check_native(report, save_images=False):
             assert not sip.isdeleted(key)
             if not compact:
                 assert view.size() == original_size
-            else:
-                check_menus()  # Reuse after resizing and recreating native HWNDs.
             sample('mode-' + str(index))
             actual_position = native_position()
             assert actual_position == saved_positions[compact], (
                 f'Mode {"compact" if compact else "full"} native position changed: '
                 f'expected {saved_positions[compact]}, actual {actual_position}')
             stages[-1]['position_restored'] = True
+            if compact:
+                # Opening the mouse panel can legitimately clamp a wider guide
+                # to the screen edge. Test that separately, after verifying the
+                # exact position restored by the mode switch itself.
+                check_menus()
+                sample('mode-' + str(index) + '-after-menu')
+                bounds = wintypes.RECT()
+                assert api.GetWindowRect(int(view.effectiveWinId()), ctypes.byref(bounds)), 'Cannot read guide native bounds'
+                screen = view.screen().availableGeometry()
+                assert (screen.left() <= bounds.left and screen.top() <= bounds.top
+                        and bounds.right <= screen.right() + 1
+                        and bounds.bottom <= screen.bottom() + 1), 'Menu layout change moved the guide outside its screen'
+                stages[-1]['within_screen'] = True
         view.hide()
         view.setCompactMode(True)
         sample('hidden-mode-change', visible=False)

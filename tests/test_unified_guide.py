@@ -15,12 +15,10 @@ class UnifiedGuideTests(TestCase):
     setUpClass = classmethod(mapping.MappingActionTests.setUpClass.__func__)
     start_input = mapping.MappingActionTests.start_input
     enter_code = mapping.MappingActionTests.enter_code
-    select_page = mapping.MappingActionTests.select_page
     tearDown = mapping.MappingActionTests.tearDown
 
     def setUp(self):
         mapping.MappingActionTests.setUp(self)
-        self.select_page('desktop')
         self.app.processEvents()
 
     def assert_compact_board_fits(self, view):
@@ -56,11 +54,15 @@ class UnifiedGuideTests(TestCase):
     def test_every_action_is_registered_and_keyboard_codes_are_preserved(self):
         items = self.layout.get_active_layout()['items']
         view = self.window.codeslayoutview
-        self.assertEqual(len(items), 129)
+        self.assertEqual(len(items), 130)
         self.assertEqual(set(view.crs), {item['code'] for item in items})
         self.assertFalse(hasattr(view, 'layout_selector'))
-        expected = {i['action']: i['code'] for i in self.layout.layouts['main']['items']
-                    if i['action'] not in ('CHANGELAYOUT', 'CODESET')}
+        expected = {letter.upper(): code for letter, code in mapping.LETTER_CODES.items()}
+        expected.update({f'F{number}': code for number, code in enumerate(mapping.FUNCTION_CODES, 1)})
+        expected.update(dict(zip(('ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE',
+                                  'SIX', 'SEVEN', 'EIGHT', 'NINE'), mapping.DIGIT_CODES.values())))
+        expected.update({'TAB': '1221221', 'DELETE': '1221121', 'STAR': '1212111',
+                         'REPEATMODE': '1121121', 'PERCENT': '1122121', 'BACKTICK': '1111111'})
         actual = {i['action']: i['code'] for i in items if i['action'] in expected}
         self.assertEqual(actual, expected)
         extras = [i for i in items if i['action'].startswith('MOUSE')]
@@ -181,7 +183,7 @@ class UnifiedGuideTests(TestCase):
                 self.assertEqual(viewport.verticalScrollBar().maximum(), 0)
                 self.assertTrue(view.settings_button.isVisible())
             self.assertEqual(view.mouse_panel.isHidden(), not show_mouse)
-        self.assertEqual(len(view.crs), 129)
+        self.assertEqual(len(view.crs), 130)
 
     def test_view_options_emit_once_and_manual_size_uses_no_transform(self):
         view = self.window.codeslayoutview
@@ -269,15 +271,8 @@ class UnifiedGuideTests(TestCase):
         view.showResult('Enter')
         self.assertEqual(panel.result_label._full_text, '已输入：Enter')
 
-    def test_candidates_are_absent_even_from_legacy_user_layouts(self):
-        from virtual_keyboard import VirtualKeyboardView
-
-        layout = dict(self.layout.get_active_layout())
-        layout['items'] = list(layout['items']) + [
-            dict(action='PREDICTION_SELECT', code='22211111', target=0, label='旧候选')]
-        view = VirtualKeyboardView(layout, dict(self.window.config))
-        self.views.append(view)
-        self.assertNotIn('22211111', view.crs)
+    def test_unified_panel_contains_no_word_candidates(self):
+        view = self.window.codeslayoutview
         self.assertNotIn('PREDICTION_SELECT', view.keystroke_crs_map)
         self.assertFalse(any(label.text() == '词语候选' for label in view.findChildren(morse.QLabel)))
 
@@ -398,6 +393,7 @@ class UnifiedGuideTests(TestCase):
         )
         for event in events:
             self.app.sendEvent(target, event)
+        self.app.processEvents()  # Apply the native QWindow move to QWidget geometry.
         available = self.app.desktop().availableGeometry(view)
         self.assertEqual(view.pos(), available.topLeft())
         self.assertIsNone(view._drag_offset)
@@ -619,13 +615,12 @@ class UnifiedGuideTests(TestCase):
 
     def test_keyboard_and_mouse_execute_without_switching_layout(self):
         listener = self.window.listenerThread
-        actions = {item['action']: item['code'] for item in self.layout.get_active_layout()['items']}
         with patch.object(morse.mouse, 'move') as move, patch.object(morse.mouse, 'double_click') as double_click:
-            self.enter_code(actions['A'])
-            self.enter_code(actions['MOUSERIGHT5'])
-            self.enter_code(actions['MOUSEDBLCLICKLEFT'])
-            self.enter_code(actions['CTRL'])
-            self.enter_code(actions['V'])
+            self.enter_code('12')
+            self.enter_code('2111111')
+            self.enter_code('2122112')
+            self.enter_code('21212')
+            self.enter_code('1112')
         move.assert_called_once_with(5, 0, False)
         double_click.assert_called_once_with(button=morse.mouse.LEFT)
         self.assertEqual(self.backend.mock_calls, [call.send('a'), call.press('ctrl'),
@@ -653,10 +648,6 @@ class UnifiedGuideTests(TestCase):
         self.assertTrue(self.window.codeslayoutview.testAttribute(morse.Qt.WA_ShowWithoutActivating))
 
     def test_changing_theme_preserves_previously_saved_settings(self):
-        # Legacy mappings remain available to internal dispatch, while saved
-        # settings and subsequent starts use the unified keyboard guide.
-        self.window.changeLayout('mouse')
-        self.assertEqual(self.layout.active_layout_name, 'mouse')
         self.window.minLetterPauseEdit.setValue(1234)
         self.window.saveSettings()
         for choice in ('light', 'dark'):
@@ -664,7 +655,6 @@ class UnifiedGuideTests(TestCase):
         with open(self.window.configManager.config_file, encoding='utf-8') as stream:
             config = json.load(stream)
         self.assertEqual(config['theme'], 'dark')
-        self.assertEqual(config['guide_layout'], 'desktop')
         self.assertEqual(config['minLetterPause'], 1234)
         self.window.GOButton.click()
         self.app.processEvents()

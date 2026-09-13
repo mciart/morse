@@ -23,7 +23,7 @@ class KeyboardInputTests(unittest.TestCase):
         # The production class still runs, but every operating-system hook is mocked.
         self.hook_key = self.enterContext(patch.object(morse.keyboard, "hook_key"))
         self.unhook_all = self.enterContext(patch.object(morse.keyboard, "unhook_all"))
-        self.enterContext(patch.object(morse.platform, "system", return_value="Windows"))
+        self.enterContext(patch("input_listener.platform.system", return_value="Windows"))
 
     def tearDown(self):
         self.unhook_all.assert_not_called()
@@ -148,9 +148,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             config={"off": False}, listenerThread=Mock(), codeslayoutview=Mock(),
             engine=Mock(), engine_timer=Mock(), audio=Mock(), _shutting_down=False,
             inputError=Mock(), processEngineEvents=Mock(),
-            endCharacterTimer=Mock(), fast_morse_mode_timer=Mock(),
-            repeat_character_timer=Mock(), currentCharacter=[1, 2],
-            lastKeyDownTime=123, repeaton=True, showNormal=Mock(),
+            currentCharacter=[1, 2], repeaton=True, showNormal=Mock(),
             onOffAction=Mock(), updateTrayInputState=Mock(), goForIt=Mock(),
             key_output=Mock(), updateOutputState=Mock(),
             get_configured_keys=Mock(return_value=["space"]),
@@ -163,19 +161,15 @@ class WindowListenerLifecycleTests(unittest.TestCase):
     def test_onoff_releases_listener_and_pending_timers_then_restarts(self):
         window = self.make_window()
         old_listener = window.listenerThread
-        timers = [window.endCharacterTimer, window.fast_morse_mode_timer, window.repeat_character_timer]
         with patch.object(morse, "KeyListenerThread") as listener_class:
             morse.Window.toggleOnOff(window)
             self.assertTrue(window.config["off"])
             self.assertIsNone(window.listenerThread)
             old_listener.stop.assert_called_once_with()
-            for timer in timers:
-                timer.stop.assert_called_once_with()
-            self.assertIsNone(window.endCharacterTimer)
-            self.assertIsNone(window.fast_morse_mode_timer)
-            self.assertIsNone(window.repeat_character_timer)
+            window.engine_timer.stop.assert_called_once_with()
+            window.engine.reset.assert_called_once_with()
+            window.audio.stop.assert_called_once_with()
             self.assertEqual(window.currentCharacter, [])
-            self.assertIsNone(window.lastKeyDownTime)
             self.assertFalse(window.repeaton)
             window.handle_key_event("space", True, 0)
             window.handle_key_event("space", False, 0)

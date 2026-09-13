@@ -20,8 +20,6 @@ class KeyerIntegrationTests(unittest.TestCase):
     def setUp(self):
         mapping.MappingActionTests.setUp(self)
         self.window.engine_timer.stop()
-        self.window.changeLayout('desktop')
-        self.views.append(self.window.codeslayoutview)
         self.now = time.monotonic() + .1
         self.window.audio.configure(enabled=True)
 
@@ -122,7 +120,7 @@ class KeyerIntegrationTests(unittest.TestCase):
             self.assertEqual(self.window.get_configured_keys(), expected)
             saved = json.loads(Path(self.window.configManager.config_file).read_text())
             self.assertEqual((saved['keyone'], saved['keytwo']), (a, b))
-        self.assertEqual(len(self.window.codeslayoutview.crs), 129)
+        self.assertEqual(len(self.window.codeslayoutview.crs), 130)
 
     def test_pause_releases_sound_and_queued_previous_session_input_is_ignored(self):
         self.engine(1)
@@ -182,7 +180,6 @@ class KeyerIntegrationTests(unittest.TestCase):
         with self.assertLogs(level='ERROR'):
             self.window.shutdown()
         self.assertIsNone(self.window.listenerThread)
-        self.assertIsNone(self.window.typestate)
         self.assertIsNone(self.window.codeslayoutview)
         self.assertFalse(self.window.engine_timer.isActive())
         self.assertTrue(self.window.audio._closed)

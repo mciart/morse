@@ -21,7 +21,6 @@ class ApplicationPathTests(unittest.TestCase):
         self.defaults = dict(theme="system", withsound=True, keyer_mode="manual", keyone="SPACE")
         self.seeds = {
             "layouts.json": '{"layouts": [{"name": "desktop"}]}',
-            "abbreviations_en.txt": "u\tyou\n",
         }
         (self.bundle / "defaults").mkdir(parents=True)
         for name, text in self.seeds.items():
@@ -52,7 +51,7 @@ class ApplicationPathTests(unittest.TestCase):
         self.assertEqual(json.loads((self.data / "config.json").read_text(encoding="utf-8")), self.defaults)
         self.assertFalse((self.data / "morsewriter.sqlite").exists())
         self.assertEqual({path.name for path in self.data.iterdir()},
-                         {'config.json', 'layouts.json', 'abbreviations_en.txt', app_paths.BOOTSTRAP_MARKER})
+                         {'config.json', 'layouts.json', app_paths.BOOTSTRAP_MARKER})
 
     def test_existing_preferences_and_custom_data_are_never_overwritten(self):
         self.data.mkdir()
@@ -71,7 +70,7 @@ class ApplicationPathTests(unittest.TestCase):
         for name, content in originals.items():
             self.assertEqual((self.data / name).read_text(encoding="utf-8"), content)
 
-    def test_legacy_migration_copies_only_small_preferences_and_abbreviations_once(self):
+    def test_legacy_migration_copies_only_small_preferences_once(self):
         self.legacy.mkdir()
         (self.legacy / "config.json").write_text(json.dumps({
             "theme": "dark", "fastMorseMode": True, "unrelated_secret": "never migrate",
@@ -82,7 +81,7 @@ class ApplicationPathTests(unittest.TestCase):
         self.bootstrap()
         self.assertEqual(json.loads((self.data / "config.json").read_text(encoding="utf-8")),
                          {"theme": "dark", "fastMorseMode": True})
-        self.assertEqual((self.data / "abbreviations_en.txt").read_text(encoding="utf-8"), "hi\t你好\n")
+        self.assertFalse((self.data / "abbreviations_en.txt").exists())
         self.assertFalse((self.data / "morsewriter.sqlite").exists())
         self.assertEqual((self.data / "layouts.json").read_text(encoding="utf-8"), self.seeds["layouts.json"])
         self.assertFalse((self.data / "old.log").exists())
@@ -98,7 +97,7 @@ class ApplicationPathTests(unittest.TestCase):
         with self.assertLogs(level="WARNING"):
             self.bootstrap()
         self.assertEqual(json.loads((self.data / "config.json").read_text(encoding="utf-8")), self.defaults)
-        self.assertEqual((self.data / "abbreviations_en.txt").read_text(encoding="utf-8"), self.seeds["abbreviations_en.txt"])
+        self.assertFalse((self.data / "abbreviations_en.txt").exists())
 
     def test_source_seed_layout_is_supported_without_release_defaults_directory(self):
         source = self.root / "checkout"
@@ -111,7 +110,7 @@ class ApplicationPathTests(unittest.TestCase):
         self.assertFalse((self.data / "morsewriter.sqlite").exists())
 
     def test_missing_bundle_asset_does_not_publish_an_incomplete_first_run(self):
-        (self.bundle / "defaults/abbreviations_en.txt").unlink()
+        (self.bundle / "defaults/layouts.json").unlink()
         with self.assertRaises(FileNotFoundError):
             self.bootstrap()
         self.assertFalse((self.data / "config.json").exists())

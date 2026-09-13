@@ -13,7 +13,7 @@ class ReleaseResourceTests(unittest.TestCase):
     def test_manifest_contains_only_reviewed_defaults_and_original_license(self):
         items = build_release.resources()
         self.assertEqual({str(target) for _, target in items}, {
-            'defaults/layouts.json', 'defaults/abbreviations_en.txt',
+            'defaults/layouts.json',
             'version', 'LICENSE',
         })
         self.assertTrue(all('*' not in str(source) for source, _ in items))

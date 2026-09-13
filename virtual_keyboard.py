@@ -4,7 +4,7 @@ from math import ceil, isfinite
 
 from PyQt5 import sip
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QTransform
+from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QTransform, QWindow
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGraphicsScene, QGraphicsView, QGridLayout,
     QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
@@ -467,9 +467,6 @@ class VirtualKeyboardView(QWidget):
         self._position_timer.setSingleShot(True)
         self._position_timer.setInterval(300)
         self._position_timer.timeout.connect(self.flushPosition)
-        self._position_restore_timer = QTimer(self)
-        self._position_restore_timer.setSingleShot(True)
-        self._position_restore_timer.timeout.connect(self._finishPositionRestore)
         self._screen = None
         self._screen_window = None
         self._screen_dirty = False
@@ -501,15 +498,41 @@ class VirtualKeyboardView(QWidget):
         self._restorePosition()
         self._position_guard = 0
 
+    def _positionWindow(self):
+        """Use the current native frame, never QWidget's previous-frame cache."""
+        handle = self.windowHandle()
+        return handle if (self.testAttribute(Qt.WA_WState_Created)
+                          and isinstance(handle, QWindow) and not sip.isdeleted(handle)) else None
+
+    def _currentPosition(self):
+        handle = self._positionWindow()
+        return handle.framePosition() if handle is not None else self.pos()
+
+    def _currentFrameGeometry(self):
+        handle = self._positionWindow()
+        return handle.frameGeometry() if handle is not None else self.frameGeometry()
+
+    def _moveToPosition(self, position):
+        handle = self._positionWindow()
+        if handle is not None:
+            # QWidget.move adds its cached frame margins to the target. After
+            # switching to frameless those margins can still describe the old
+            # title bar, even while QWidget.pos claims to equal the target.
+            # QWindow's frame-inclusive setter uses the new platform window.
+            handle.setFramePosition(position)
+        else:
+            self.move(position)
+
     def _rememberPosition(self):
         if (self._position_guard or self._position_restore_pending or self._screen_refreshing or not self.isVisible() or
                 self.isMinimized() or self.isMaximized()):
             return
-        screen = QApplication.screenAt(self.frameGeometry().center()) or self._screen
+        screen = QApplication.screenAt(self._currentFrameGeometry().center()) or self._screen
         if screen is None or sip.isdeleted(screen):
             return
         available = screen.availableGeometry()
-        position = {'x': self.pos().x(), 'y': self.pos().y(), 'screen': screen.name(),
+        point = self._currentPosition()
+        position = {'x': point.x(), 'y': point.y(), 'screen': screen.name(),
                     'available': [available.x(), available.y(), available.width(), available.height()]}
         mode = 'compact' if self._compact_mode else 'full'
         if position == self._positions.get(mode):
@@ -556,7 +579,7 @@ class VirtualKeyboardView(QWidget):
         available = screen.availableGeometry()
         self._position_guard += 1
         try:
-            self.move(x, y)
+            self._moveToPosition(QPoint(x, y))
             if self._compact_mode:
                 self._fitCompactWindow(available)
             else:
@@ -570,14 +593,14 @@ class VirtualKeyboardView(QWidget):
             self._position_restore_pending = False
 
     def _fitFullWindow(self, available):
-        extra = self.frameGeometry().size() - self.size()
+        extra = self._currentFrameGeometry().size() - self.size()
         self.resize(min(self.width(), max(1, available.width() - max(0, extra.width()))),
                     min(self.height(), max(1, available.height() - max(0, extra.height()))))
-        frame = self.frameGeometry()
+        frame = self._currentFrameGeometry()
         target = QPoint(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)),
                         max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
         if target != frame.topLeft():
-            self.move(self.pos() + target - frame.topLeft())
+            self._moveToPosition(self._currentPosition() + target - frame.topLeft())
 
     def _availableGeometry(self):
         return QApplication.desktop().availableGeometry(self)
@@ -641,11 +664,9 @@ class VirtualKeyboardView(QWidget):
             self.outer_layout.activate()
             self.scroll_area._fitBoard()
             if self._position_restore_pending:
-                # Qt can update frame margins after Show when changing native
-                # window flags. Reapply the saved outer position only once the
-                # new frame and board geometry have settled. A zero timer can
-                # run before Qt dispatches its queued native frame update.
-                self._position_restore_timer.start(1)
+                # The new QWindow already has the right native frame margins;
+                # its frame-inclusive move does not depend on a timer delay.
+                self._finishPositionRestore()
             self.update()
         finally:
             self._screen_refreshing = False
@@ -1112,7 +1133,7 @@ class VirtualKeyboardView(QWidget):
         self.scroll_area._fitBoard()
         self._position_guard += 1
         try:
-            self._moveInsideScreen(self.pos(), available)
+            self._moveInsideScreen(self._currentPosition(), available)
         finally:
             self._position_guard -= 1
 
@@ -1120,17 +1141,18 @@ class VirtualKeyboardView(QWidget):
         if available is None:
             screen = QApplication.screenAt(position + self.rect().center())
             available = screen.availableGeometry() if screen else QApplication.desktop().availableGeometry(self)
-        self.move(max(available.left(), min(position.x(), available.right() - self.width() + 1)),
-                  max(available.top(), min(position.y(), available.bottom() - self.height() + 1)))
+        self._moveToPosition(QPoint(
+            max(available.left(), min(position.x(), available.right() - self.width() + 1)),
+            max(available.top(), min(position.y(), available.bottom() - self.height() + 1))))
 
     def eventFilter(self, watched, event):
         if self._compact_mode and watched is self.scroll_area.viewport():
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 self._resize_edges = self._resizeEdges(event.pos())
                 if self._resize_edges:
-                    self._resize_origin = (QRect(self.geometry()), event.globalPos())
+                    self._resize_origin = (self._currentFrameGeometry(), event.globalPos())
                 else:
-                    self._drag_offset = event.globalPos() - self.pos()
+                    self._drag_offset = event.globalPos() - self._currentPosition()
                 return True
             if event.type() == QEvent.MouseMove:
                 if event.buttons() & Qt.LeftButton:

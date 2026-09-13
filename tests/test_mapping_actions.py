@@ -12,24 +12,25 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 with patch("logging.basicConfig"):
     import MorseCodeGUI as morse
 
-from PyQt5.QtGui import QTextDocument
 from keyboard_output import KeyboardOutput
 
 
-# Independent examples from the published MorseWriter chart, not derived from
-# the application's action metadata (which is what these tests verify).
+# Fixed expectations, independent of the runtime table and action metadata.
+# These 18 punctuation characters use the international-first code chart.
 PUNCTUATION_CODES = {
-    "121212": ".", "221122": ",", "112211": "?", "121122": "!",
-    "212121": ":", "11121": ";", "12221": "@", "21222": "#",
-    "211121": "$", "122121": "%", "21122": "&", "12111": "*",
-    "12211": "+", "2221": "-", "12212": "=", "22112": "/",
-    "211111": "\\", "121221": "'", "22122": '"', "111221": "(",
-    "211221": ")", "121112": "<", "221121": ">", "212112": "^",
-    "11221": "_",
+    "121212": ".", "221122": ",", "112211": "?", "212122": "!",
+    "222111": ":", "212121": ";", "122121": "@", "1112112": "$",
+    "12111": "&", "12121": "+", "211112": "-", "21112": "=",
+    "21121": "/", "122221": "'", "121121": '"', "21221": "(",
+    "212212": ")", "112212": "_",
+}
+COMPUTER_PUNCTUATION_CODES = {
+    "21222": "#", "1122121": "%", "1212111": "*", "211111": "\\",
+    "121112": "<", "221121": ">", "212112": "^",
 }
 FUNCTION_CODES = (
     "112222", "111222", "111122", "111112", "111111", "121111",
-    "122111", "122211", "122221", "122222", "212222", "211222",
+    "122111", "122211", "1122221", "122222", "212222", "211222",
 )
 LETTER_CODES = dict(zip("abcdefghijklmnopqrstuvwxyz", (
     "12", "2111", "2121", "211", "1", "1121", "221", "1111", "11",
@@ -40,9 +41,13 @@ DIGIT_CODES = dict(zip("0123456789", (
     "22222", "12222", "11222", "11122", "11112", "11111", "21111",
     "22111", "22211", "22221",
 )))
-SHORT_DIGIT_CODES = dict(zip("0123456789", (
-    "211", "1", "2", "12", "11", "21", "22", "122", "112", "111",
-)))
+NAVIGATION_CODES = {
+    "1212": "enter", "1122": "space", "2222": "backspace", "1221221": "tab",
+    "221211": "shift+tab", "222112": "page up", "222121": "page down",
+    "222212": "left", "222221": "right", "222211": "up", "222222": "down",
+    "11211": "esc", "111121": "home", "21211": "end", "12112": "insert",
+    "1221121": "delete", "221111": "windows", "211122": "menu", "112121": "caps lock",
+}
 
 
 class MappingActionTests(unittest.TestCase):
@@ -52,14 +57,11 @@ class MappingActionTests(unittest.TestCase):
 
     def setUp(self):
         project = Path(__file__).resolve().parents[1]
-        data_path = str(project / "user_data")
-        self.enterContext(patch.object(morse, "user_data_dir", data_path, create=True))
-        self.enterContext(patch.object(morse, "get_user_data_dir", return_value=data_path))
         temporary = self.enterContext(TemporaryDirectory())
         config_path = Path(temporary) / "config.json"
         config_path.write_text(json.dumps(dict(
-            morse.DEFAULT_CONFIG, keylen=3, withsound=False, guide_layout='main',
-            minLetterPause=60000, fastMorseMode=False, code_profile='legacy',
+            morse.DEFAULT_CONFIG, keylen=3, withsound=False,
+            minLetterPause=60000, fastMorseMode=False,
         )), encoding="utf-8")
 
         self.start_listener = self.enterContext(patch.object(morse.KeyListenerThread, "start"))
@@ -73,7 +75,6 @@ class MappingActionTests(unittest.TestCase):
             self.enterContext(patch.object(morse.mouse, name,
                                           side_effect=AssertionError("Unexpected OS mouse output")))
         self.enterContext(patch.object(morse.QMessageBox, "information"))
-        self.enterContext(patch.object(morse.AudioDeviceSelector, "play_audio"))
         self.quit_app = self.enterContext(patch.object(self.app, "quit"))
 
         real_audio = morse.ToneAudio
@@ -97,7 +98,7 @@ class MappingActionTests(unittest.TestCase):
                 widget.hide()
                 widget.deleteLater()
             except RuntimeError:
-                # Switching pages already schedules the previous view's deletion.
+                # Returning to settings already deletes the previous guide.
                 pass
         self.app.sendPostedEvents(None, morse.QtCore.QEvent.DeferredDelete)
         self.app.processEvents()
@@ -108,11 +109,8 @@ class MappingActionTests(unittest.TestCase):
         self.views.append(self.window.codeslayoutview)
         self.assertIsNotNone(self.window.listenerThread)
         self.assertEqual(self.layout.active_layout_name, "desktop")
-        # The normal settings now always open the unified guide. These legacy
-        # mapping tests deliberately enter the compatibility layout internally.
-        self.window.changeLayout('main')
-        self.views.append(self.window.codeslayoutview)
-        self.assertEqual(self.layout.active_layout_name, "main")
+        self.assertEqual(set(self.layout.layouts), {"desktop"})
+        self.assertEqual(len(self.window.codeslayoutview.crs), 130)
 
     def enter_code(self, code):
         """Use the same Qt events as the three-key listener, including end-key."""
@@ -130,86 +128,48 @@ class MappingActionTests(unittest.TestCase):
         if view is not None and view not in self.views:
             self.views.append(view)
 
-    def select_page(self, name):
-        selector = self.window.codeslayoutview.layout_selector
-        index = selector.findData(name)
-        self.assertGreaterEqual(index, 0)
-        selector.setCurrentIndex(index)
-        selector.activated.emit(index)
-        self.views.append(self.window.codeslayoutview)
-        self.assertEqual(self.layout.active_layout_name, name)
-
     def test_repaired_navigation_codes_emit_the_required_system_keys(self):
-        for code, key in (("221211", "shift+tab"), ("221111", "windows"),
-                          ("211122", "menu")):
+        for code, key in NAVIGATION_CODES.items():
             with self.subTest(code=code, key=key):
                 self.backend.reset_mock()
                 self.enter_code(code)
                 self.assertEqual(self.backend.mock_calls, [call.send(key)])
                 self.assertEqual(self.window.key_output.held_modifiers, ())
 
-    def test_all_25_punctuation_codes_emit_the_displayed_character(self):
+    def test_all_18_international_punctuation_codes_emit_the_displayed_character(self):
+        self.assertEqual(len(PUNCTUATION_CODES), 18)
         for code, character in PUNCTUATION_CODES.items():
             with self.subTest(code=code, character=character):
                 self.backend.reset_mock()
                 self.enter_code(code)
                 self.assertEqual(self.backend.mock_calls, [call.write(character, exact=True)])
 
-    def test_function_keys_and_number_page_work_without_text_state(self):
-        self.window.clearTextState()
+    def test_computer_symbol_extensions_emit_their_literal_character(self):
+        for code, character in COMPUTER_PUNCTUATION_CODES.items():
+            with self.subTest(code=code, character=character):
+                self.backend.reset_mock()
+                self.enter_code(code)
+                self.assertEqual(self.backend.mock_calls, [call.write(character, exact=True)])
+
+    def test_backtick_has_its_own_code_and_does_not_emit_a_function_key(self):
+        self.enter_code("1111111")
+        self.assertEqual(self.backend.mock_calls, [call.write("`", exact=True)])
+
+    def test_all_function_keys_include_the_f9_extension(self):
         for number, code in enumerate(FUNCTION_CODES, 1):
             with self.subTest(function=number):
                 self.backend.reset_mock()
                 self.enter_code(code)
                 self.assertEqual(self.backend.mock_calls, [call.send(f"f{number}")])
-        self.enter_code("21112")  # Main -> number page.
-        self.assertEqual(self.layout.active_layout_name, "number")
-        self.assertIsNone(self.window.typestate)
-        self.backend.reset_mock()
-        self.enter_code("1")
-        self.enter_code("1212")
-        self.enter_code("221")
-        self.assertEqual(self.backend.mock_calls,
-                         [call.send("1"), call.send("enter"), call.write("+", exact=True)])
 
-    def test_main_letters_digits_and_number_short_codes_never_expand_abbreviations(self):
+    def test_all_letters_and_digits_emit_one_key_then_a_space(self):
         for character, code in {**LETTER_CODES, **DIGIT_CODES}.items():
-            with self.subTest(page="main", character=character):
+            with self.subTest(character=character):
                 self.backend.reset_mock()
                 self.enter_code(code)
-                self.enter_code("1122")  # Complete the word, including c, u, 2, and 4.
+                self.enter_code("1122")
                 self.assertEqual(self.backend.mock_calls,
                                  [call.send(character), call.send("space")])
-        self.enter_code("21112")
-        for character, code in SHORT_DIGIT_CODES.items():
-            with self.subTest(page="number", character=character):
-                self.backend.reset_mock()
-                self.enter_code(code)
-                self.enter_code("1212")
-                self.assertEqual(self.backend.mock_calls,
-                                 [call.send(character), call.send("enter")])
-
-    def test_typing_abbreviation_waits_for_space_before_expanding(self):
-        self.enter_code("111211")  # Main -> typing page.
-        self.enter_code("2121")
-        self.assertEqual(self.backend.mock_calls, [call.send("c")])
-        self.assertEqual(self.window.typestate.text, "c")
-        self.backend.reset_mock()
-        self.enter_code("1122")
-        self.assertEqual(self.backend.mock_calls, [call.send("space"),
-                         call.send("backspace"), call.send("backspace"),
-                         call.write("see ", exact=True)])
-        self.assertEqual(self.window.typestate.text, "see ")
-
-    def test_abbreviation_expansion_preserves_case_and_replaces_the_complete_prefix(self):
-        self.enter_code("111211")
-        for character in "afaik":
-            self.enter_code(LETTER_CODES[character])
-        self.backend.write.assert_not_called()
-        self.assertEqual(self.window.typestate.text, "afaik")
-        self.enter_code("1122")
-        self.backend.write.assert_called_once_with("as far as I know ", exact=True)
-        self.assertEqual(self.window.typestate.text, "as far as I know ")
 
     def test_ctrl_v_is_a_one_shot_shortcut_through_real_codes(self):
         self.enter_code("21212")  # Ctrl.
@@ -218,25 +178,33 @@ class MappingActionTests(unittest.TestCase):
         self.enter_code("1112")   # A subsequent V is plain text.
         self.assertEqual(self.backend.mock_calls, [call.press("ctrl"), call.send("v"),
                                                  call.release("ctrl"), call.send("v")])
-        self.assertEqual(self.window.typestate.text, "v")
         self.assertEqual(self.window.key_output.held_modifiers, ())
 
-    def test_original_repeat_ctrl_v_repeat_sequence_retains_then_releases_ctrl(self):
+    def test_each_modifier_is_released_after_the_next_character(self):
+        for code, key in (('11212', 'shift'), ('12122', 'alt'),
+                          ('21212', 'ctrl'), ('112122', 'windows')):
+            with self.subTest(key=key):
+                self.backend.reset_mock()
+                self.enter_code(code)
+                self.enter_code('12')
+                self.assertEqual(self.backend.mock_calls,
+                                 [call.press(key), call.send('a'), call.release(key)])
+                self.assertEqual(self.window.key_output.held_modifiers, ())
+
+    def test_modifier_lock_ctrl_v_unlock_sequence_retains_then_releases_ctrl(self):
         self.enter_code("12")  # A prior action must never be replayed by the lock code.
         self.backend.reset_mock()
-        self.enter_code("121121")
+        self.enter_code("1121121")
         self.assertTrue(self.window.repeaton)
         self.assertEqual(self.backend.mock_calls, [])
         self.enter_code("21212")
         self.enter_code("1112")
         self.assertEqual(self.backend.mock_calls, [call.press("ctrl"), call.send("v")])
         self.assertEqual(self.window.key_output.held_modifiers, ("ctrl",))
-        self.assertIsNone(self.window.repeat_character_timer)
-        self.enter_code("121121")
+        self.enter_code("1121121")
         self.assertEqual(self.backend.mock_calls,
                          [call.press("ctrl"), call.send("v"), call.release("ctrl")])
         self.assertFalse(self.window.repeaton)
-        self.assertEqual(self.window.typestate.text, "a")
 
     def test_pause_settings_and_exit_release_a_locked_ctrl(self):
         for index, action in enumerate(("pause", "settings", "exit")):
@@ -244,7 +212,7 @@ class MappingActionTests(unittest.TestCase):
                 if index:
                     self.window.stopIt()
                     self.start_input()
-                self.enter_code("121121")
+                self.enter_code("1121121")
                 self.enter_code("21212")
                 self.backend.reset_mock()
                 listener = self.window.listenerThread
@@ -262,34 +230,22 @@ class MappingActionTests(unittest.TestCase):
                 self.assertFalse(listener.keep_running)
         self.quit_app.assert_called_once_with()
 
-    def test_page_navigation_preserves_listener_and_displays_every_active_code(self):
+    def test_every_unified_code_is_displayed_with_one_live_listener(self):
         listener = self.window.listenerThread
-        for page in ("main", "typing", "mouse", "number", "main"):
-            with self.subTest(page=page):
-                self.select_page(page)
-                view = self.window.codeslayoutview
-                entries = {item["code"]: item for item in self.layout.get_active_layout()["items"]
-                           if not item.get("emptyspace")}
-                self.assertEqual(set(view.crs), set(entries))
-                for code, item in entries.items():
-                    representation = view.crs[code]
-                    self.assertIs(representation.item, item)
-                    self.assertEqual(representation.code, code.replace("1", ".").replace("2", "-"))
-                    displayed = QTextDocument()
-                    displayed.setHtml(representation.character.text())
-                    expected_label = item["_action"].getlabel()
-                    if self.window.config["upperchars"]:
-                        expected_label = expected_label.upper()
-                    self.assertEqual(displayed.toPlainText(), expected_label)
-                self.assertIs(self.window.listenerThread, listener)
-                self.assertTrue(listener.keep_running)
-        self.enter_code("22121")  # Morse navigation also keeps the existing listener.
-        self.assertEqual(self.layout.active_layout_name, "mouse")
+        view = self.window.codeslayoutview
+        entries = {item["code"]: item for item in self.layout.get_active_layout()["items"]}
+        self.assertEqual(set(view.crs), set(entries))
+        for code, item in entries.items():
+            representation = view.crs[code]
+            self.assertIs(representation.item, item)
+            self.assertEqual(representation.code, code.replace("1", "•").replace("2", "–"))
+            self.assertIsNotNone(item['_action'])
         self.assertIs(self.window.listenerThread, listener)
+        self.assertTrue(listener.keep_running)
         self.start_listener.assert_called_once_with()
         self.assertEqual(self.backend.mock_calls, [])
 
-    def test_sound_and_codeset_execute_app_commands_without_unknown_key_output(self):
+    def test_sound_code_toggles_audio_without_emitting_a_keyboard_key(self):
         self.assertFalse(self.window.config["withsound"])
         self.enter_code("121211")
         self.assertTrue(self.window.config["withsound"])
@@ -298,18 +254,36 @@ class MappingActionTests(unittest.TestCase):
         self.assertFalse(self.window.config["withsound"])
         self.assertFalse(self.window.withSound.isChecked())
         listener = self.window.listenerThread
-        self.enter_code("22212")
-        self.assertEqual(self.layout.active_layout_name, "mouse")
+        self.assertEqual(self.layout.active_layout_name, "desktop")
         self.assertIs(self.window.listenerThread, listener)
         self.assertEqual(self.backend.mock_calls, [])
 
     def test_mouse_double_click_codes_reach_the_correct_mouse_button(self):
-        self.enter_code("22121")
         with patch.object(morse.mouse, "double_click") as double_click:
-            self.enter_code("2122")
-            self.enter_code("2222")
+            self.enter_code("2122112")
+            self.enter_code("2122212")
         self.assertEqual(double_click.call_args_list,
                          [call(button=morse.mouse.LEFT), call(button=morse.mouse.RIGHT)])
+        self.assertEqual(self.backend.mock_calls, [])
+
+    def test_mouse_movement_codes_keep_all_eight_directions_and_three_distances(self):
+        directions = (
+            ((1, 0), ('2111111', '2111112', '2111121')),
+            ((-1, 0), ('2111122', '2111211', '2111212')),
+            ((0, -1), ('2111221', '2111222', '2112111')),
+            ((0, 1), ('2112112', '2112121', '2112122')),
+            ((1, -1), ('2112211', '2112212', '2112221')),
+            ((1, 1), ('2112222', '2121111', '2121112')),
+            ((-1, -1), ('2121121', '2121122', '2121211')),
+            ((-1, 1), ('2121212', '2121221', '2121222')),
+        )
+        with patch.object(morse.mouse, 'move') as move:
+            for (x, y), codes in directions:
+                for distance, code in zip((5, 40, 250), codes):
+                    with self.subTest(direction=(x, y), distance=distance):
+                        move.reset_mock()
+                        self.enter_code(code)
+                        move.assert_called_once_with(x * distance, y * distance, False)
         self.assertEqual(self.backend.mock_calls, [])
 
 

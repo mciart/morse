@@ -3,28 +3,22 @@ import json
 import logging
 import os
 import sys
-import platform
-import threading
 import time
-from html import escape
-from collections import OrderedDict
-from enum import Enum
-from threading import Thread
 
 # Third-party imports
 from PyQt5 import QtCore
 from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio
-from PyQt5.QtCore import QIODevice, QFile, QThread, pyqtSignal, QTimer, Qt, QObject, QLocale, QTranslator, QLibraryInfo
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt, QLocale, QTranslator, QLibraryInfo
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout, QSpinBox,
-                             QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                             QGroupBox, QHBoxLayout, QLabel, QMessageBox,
                              QPushButton, QRadioButton, QSystemTrayIcon, QVBoxLayout,
-                             QWidget, QApplication, QMenu, QFileDialog, QStatusBar, QScrollArea, QKeySequenceEdit)
+                             QWidget, QApplication, QMenu, QScrollArea, QKeySequenceEdit)
 import keyboard
 import mouse
 # Local application/library specific imports
 import icons_rc
-from ui_theme import ThemeManager, THEME_COLORS
+from ui_theme import ThemeManager
 from keyboard_output import KeyboardOutput
 from virtual_keyboard import VirtualKeyboardView
 from morse_engine import MorseEngine
@@ -32,14 +26,8 @@ from input_listener import KeyListenerThread
 from tone_audio import ToneAudio
 from windows_integration import (StartupRegistration, GlobalHotkey, parse_hotkey,
                                  DEFAULT_GLOBAL_HOTKEY, show_guide_without_activation)
-from app_paths import source_resource, bootstrap_assets
+from app_paths import bootstrap_assets, layouts_seed_path
 from app_paths import user_data_dir as writable_user_data_dir
-
-def get_user_data_dir(app_name="MorseWriter"):
-    """
-    Returns the appropriate directory for storing user data based on the OS and whether the app is frozen.
-    """
-    return str(writable_user_data_dir(app_name))
 
 
 # Logging is installed by the executable; importing the UI never overwrites logs.
@@ -47,23 +35,13 @@ def get_user_data_dir(app_name="MorseWriter"):
 # # If you want to the console
 # logging.basicConfig(level=logging.DEBUG,format='%(name)s - %(levelname)s - %(message)s')
 
-lastkeydowntime = -1
-
-keystrokes_state = {}
-currentX = 0
-currentY = 0
-pressingKey = False
-typestate = None
-
 # If configfile file is lost.. 
 DEFAULT_CONFIG = {
   "theme": "system",
-  "guide_layout": "desktop",
   "guide_auto_fit": True,
   "guide_compact": False,
   "guide_compact_scale": None,
   "guide_positions": None,
-  "code_profile": "morsey",
   "show_mouse": False,
   "keylen": 1,
   "keyone": "SPACE",
@@ -78,10 +56,6 @@ DEFAULT_CONFIG = {
   "confirmation_sound": False,
   "audio_device": "",
   "withsound": True,
-  "SoundDit": "res/dit_sound.wav",
-  "SoundDah": "res/dah_sound.wav",
-  "SoundTyping": "res/typing_sound.wav",
-  "debug": True,
   "off": False,
   "fontsizescale": 100,
   "upperchars": True,
@@ -92,7 +66,6 @@ DEFAULT_CONFIG = {
   "winposx": 10,
   "winposy": 10
 }
-
 
 
 class AudioDeviceSelector(QWidget):
@@ -131,37 +104,6 @@ class AudioDeviceSelector(QWidget):
         self.status_label.setText('正在试听；测试音会自动停止。')
         self.audio.preview()
 
-    def play_audio(self, _file):
-        # Compatibility for integrations using the old audio-test entry point.
-        self.test_audio()
-
-
-@staticmethod
-def load_abbreviations(file_path):
-    abbreviations = {}
-    try:
-        logging.debug(f"[TypeState] Trying to load abbreviations from file: {file_path}")
-        with open(file_path, 'r') as f:
-            for line in f:
-                if line.strip():
-                    abbr, expansion = line.strip().split('\t')
-                    abbreviations[abbr] = expansion
-    except Exception as e:
-        logging.error(f"Failed to load abbreviations: {e}")
-    return abbreviations
-
-
-@staticmethod
-def expand_abbreviation(keys, abbreviations):
-    words = keys.split()
-    if not words or not abbreviations:
-        return None, None
-    last_word = words[-1]
-
-    if last_word in abbreviations:
-        return abbreviations[last_word], len(last_word)
-    else:
-        return None,None
 
 class ConfigManager:
     def __init__(self, config_file=None, default_config=DEFAULT_CONFIG):
@@ -269,7 +211,6 @@ class ConfigManager:
         "F12": {'label': 'F12', 'key_code': 'f12', 'character': None, 'arg': None},
         "REPEATMODE": {'label': '修饰键锁定', 'key_code': 'REPEATMODE', 'character': None, 'arg': 0},
         "SOUND": {'label': '提示音', 'key_code': 'unknown', 'character': None, 'arg': 8},
-        "CODESET": {'label': '切换码表', 'key_code': 'unknown', 'character': None, 'arg': 9},
         "MOUSERIGHT5": {'label': '右移5', 'key_code': 'MOUSERIGHT5', 'character': None, 'arg': 2},
         "MOUSEUP5": {'label': '上移5', 'key_code': 'MOUSEUP5', 'character': None, 'arg': 3},
         "MOUSECLICKLEFT": {'label': '左键单击', 'key_code': 'MOUSECLICKLEFT', 'character': None, 'arg': 4},
@@ -303,7 +244,7 @@ class ConfigManager:
         "MOUSEDOWNRIGHT40": {'label': '右下40', 'key_code': 'MOUSEDOWNRIGHT40', 'character': None, 'arg': 2},
         "MOUSEDOWNRIGHT250": {'label': '右下250', 'key_code': 'MOUSEDOWNRIGHT250', 'character': None, 'arg': 3}
         }
-        self.config_file = config_file or os.path.join(user_data_dir, 'config.json')
+        self.config_file = config_file or os.path.join(writable_user_data_dir(), 'config.json')
         self.default_config = default_config
         self.keystrokemap, self.keystrokes = self.initKeystrokeMap()
         self.config = self.read_config()
@@ -324,6 +265,9 @@ class ConfigManager:
             try:
                 with open(self.config_file, "r") as file:
                     data = json.load(file)
+                    for key in ('guide_layout', 'code_profile', 'SoundDit', 'SoundDah',
+                                'SoundTyping', 'withdebug', 'debug'):
+                        data.pop(key, None)
                     # self.update_keystrokes(data) # Note:cause issue to save configuration
                     self.convert_types(data)
                     if 'keyer_mode' not in data:
@@ -372,171 +316,66 @@ class ConfigManager:
             toggle_action = value.get('toggle_action', False)
 
             if key.startswith('MOUSE'):
-                # Mouse actions will use ActionLegacy
-                actions[key.upper()] = lambda item, lbl=label, kc=key_code, char=character, a=arg, win=window: ActionLegacy(item, a, lbl, kc)
+                actions[key.upper()] = lambda item, lbl=label, kc=key_code, a=arg: MouseAction(item, a, lbl, kc)
             else:
                 # Correctly capture the loop variables using default values in lambda
                 actions[key.upper()] = lambda item, win=window, lbl=label, kc=key_code, char=character, a=arg, tog=toggle_action: ActionKeyStroke(
                     {'label': lbl, 'key_code': kc, 'character': char, 'arg': a}, kc, tog, win)
 
-        # Define special actions with correct lambda capturing
-        actions["CHANGELAYOUT"] = lambda item, win=window: ChangeLayoutAction(item, win.changeLayout)
-
-        # Assuming the action name is stored in item['action'] and matches keys in key_data
-        actions["KEYSTROKE"] = lambda item, kd=self.key_data, win=window: ActionKeyStroke(
-            item, kd[item['action'].upper()]['key_code'], win=win)
-
         actions["REPEATMODE"] = lambda item, win=window: RepeatOnAction(item, repeat_on_callback=win.enableRepeatMode)
         actions["SOUND"] = lambda item, win=window: CallbackAction(item, '提示音', win.toggleSound)
-        actions["CODESET"] = lambda item, win=window: CallbackAction(item, '切换码表', win.cycleLayout)
 
         self.actions = actions
         return actions
 
 
-class TypeState:
-    """Plain output buffer used by the compatibility page's abbreviations."""
-
-    def __init__ (self, abbreviations=None):
-        self.text = ""
-        self.abbreviations = abbreviations
-        self.expanded_text = None
-        self.keyLength = 0
-
-    def pushchar (self, char):
-        self.text += char
-    def pushstr (self, str):
-        self.text += str
-    def popchar (self):
-        self.text = self.text[:-1]
-
-    def get_abbreviation(self):
-        logging.debug("[TypeState] Fetching abbreviation for text: {}".format(self.text))
-        if self.text is not None:
-            try:
-                self.expanded_text, self.keyLength = expand_abbreviation(self.text, self.abbreviations)
-                logging.debug("[TypeState] Abbreviation fetched: {}".format(self.expanded_text))
-
-            except Exception as e:
-                logging.error(f"[TypeState] Failed to get abbreviations: {str(e)}")
-                self.expanded_text = None
-                self.keyLength = 0
-
-        return self.expanded_text, self.keyLength
-
-class KeyCombinationListener(QObject):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.current_modifiers = 0
-        self.current_key = 0
-        logging.debug(f"[KeyCombinationListener __init__]")
-
-    def keyPressEvent(self, event):
-        self.current_modifiers |= int(event.modifiers())
-        self.current_key = event.key()
-
-        if (self.current_modifiers & Qt.CTRL and
-            self.current_modifiers & Qt.SHIFT and
-            self.current_key == Qt.Key_P):
-            self.resetState()
-            logging.debug("[KeyCombinationListener] \"Ctrl + Shift + P\" detected Escaping Morse Mode")
-            return True
-        else:
-            self.resetState()
-            return False
-
-    def keyReleaseEvent(self, event):
-        self.resetState()
-
-    def resetState(self):
-        self.current_modifiers = 0
-        self.current_key = 0
-
-
 class LayoutManager:
-    def __init__(self, layout_file, code_profile='morsey'):
-        from morse_profiles import normalize_code_profile
+    def __init__(self, layout_file):
         self.layout_file = layout_file
         self.layouts = {}
-        self._raw_layouts = {}
-        self._actions = None
-        self.code_profile = normalize_code_profile(code_profile)
-        self.profile_error = None
-        self.active_layout_name = None
-        self.main_layout_name = None
+        self.layout_warning = None
+        self.main_layout_name = 'desktop'
+        self.active_layout_name = 'desktop'
         self.load_layouts()
 
     def load_layouts(self):
-        """Loads layout data from a JSON file without assigning actions."""
+        """Normalize old files into the single guide without rewriting them."""
+        from morse_profiles import normalize_layouts
         try:
-            with open(self.layout_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self._raw_layouts = {k: v for k, v in data['layouts'].items()}
-            # Old user layouts keep their custom keys on disk. Retired candidate
-            # commands are ignored in memory when opening those layouts.
-            for layout in self._raw_layouts.values():
-                layout['items'] = [item for item in layout.get('items', [])
-                                   if item.get('action') != 'PREDICTION_SELECT']
-                layout.pop('supports_prediction', None)
-            from morse_profiles import apply_code_profile
-            self.profile_error = None
+            with open(self.layout_file, 'r', encoding='utf-8') as stream:
+                data = json.load(stream)
+            defaults_path = layouts_seed_path()
+            self._default_layout = json.loads(defaults_path.read_text(encoding='utf-8'))['layouts']['desktop']
             try:
-                self.layouts = apply_code_profile(self._raw_layouts, self.code_profile)
+                self.layouts = normalize_layouts(data['layouts'], self._default_layout)
             except ValueError as error:
-                self.profile_error = str(error)
-                self.code_profile = 'legacy'
-                self.layouts = apply_code_profile(self._raw_layouts, 'legacy')
-                logging.warning('编码方案冲突，暂用旧版专用码表：%s', error)
-            self.main_layout_name = data.get('mainlayout')
-            self.active_layout_name = data.get('mainlayout')
-            if self.active_layout_name not in self.layouts:
-                raise ValueError("No valid main layout found in the layout file.")
-        except FileNotFoundError:
-            raise Exception(f"Layout file {self.layout_file} not found.")
-        except json.JSONDecodeError:
-            raise Exception("Error decoding JSON from the layout file.")
+                self._use_default_layout(error)
+        except FileNotFoundError as error:
+            raise ValueError('无法找到码表文件：' + str(error.filename)) from error
+        except json.JSONDecodeError as error:
+            raise ValueError('码表文件不是有效的 JSON') from error
+
+    def _use_default_layout(self, error):
+        from morse_profiles import normalize_layouts
+        self.layout_warning = str(error)
+        logging.warning('旧布局不可用，本次使用统一默认码表；原文件保留：%s', error)
+        self.layouts = normalize_layouts({'desktop': self._default_layout})
 
     def set_actions(self, actions):
-        """Integrates actions with the layout items loaded from the layout file."""
-        self._actions = actions
-        for layout_name, layout in self.layouts.items():
-            if 'items' in layout:
-                for item in layout['items']:
-                    action_name = item.get('action')
-                    if action_name in actions:
-                        item['_action'] = actions[action_name](item)
-                    else:
-                        item['_action'] = None
-                        logging.warning(f"No action found for {action_name} in layout {layout_name}")
-
-    def set_code_profile(self, profile):
-        """Rebuild from JSON before binding actions; never copy live Qt objects."""
-        from morse_profiles import apply_code_profile, normalize_code_profile
-        profile = normalize_code_profile(profile)
-        if profile == self.code_profile:
-            return False
-        layouts = apply_code_profile(self._raw_layouts, profile)
-        self.layouts = layouts
-        self.code_profile = profile
-        self.profile_error = None
-        if self._actions is not None:
-            self.set_actions(self._actions)
-        return True
-
-    def set_active(self, layout_name):
-        """Sets the active layout by name."""
-        if layout_name in self.layouts:
-            self.active_layout_name = layout_name
-            logging.info(f"Active layout set to {layout_name}")
-        else:
-            raise ValueError("Specified layout does not exist.")
+        """Bind runtime actions once, after normalizing the plain JSON data."""
+        unsupported = [item.get('action') for item in self.get_active_layout()['items']
+                       if item.get('action') not in actions]
+        if unsupported:
+            self._use_default_layout('未支持的动作：' + ', '.join(map(str, unsupported)))
+        for item in self.get_active_layout()['items']:
+            action_name = item.get('action')
+            factory = actions.get(action_name)
+            if factory is None:
+                raise ValueError('统一码表存在未支持的动作：' + str(action_name))
+            item['_action'] = factory(item)
 
     def get_active_layout(self):
-        """Returns the currently active layout."""
-        if self.active_layout_name:
-            return self.layouts[self.active_layout_name]
-        else:
-            raise ValueError("No active layout set.")
+        return self.layouts['desktop']
 
 def moveMouse(x_delta, y_delta):
     logging.info(f"moveMouse to {x_delta} {y_delta}")
@@ -553,17 +392,6 @@ def clickMouse(button='left', action='click'):
         mouse.press(btn)
     elif action == 'release':
         mouse.release(btn)
-
-
-def getPossibleCombos(currentCharacter):
-    x = ""
-    for i in currentCharacter:
-        x += str(i)
-    possibleactions = []
-    for action in normalmapping:
-        if (len(action) >= len(x) and action[:len(x)] == x):
-            possibleactions.append(action)
-    logging.debug("possible: %s", str(possibleactions))
 
 
 class Action (object):
@@ -588,10 +416,33 @@ class CallbackAction(Action):
         self.callback()
 
 
-class ActionLegacy (Action):
+class MouseAction(Action):
+    MOVEMENTS = {
+        'MOUSEUP5': (0, -5), 'MOUSEDOWN5': (0, 5),
+        'MOUSELEFT5': (-5, 0), 'MOUSERIGHT5': (5, 0),
+        'MOUSEUPLEFT5': (-5, -5), 'MOUSEUPRIGHT5': (5, -5),
+        'MOUSEDOWNLEFT5': (-5, 5), 'MOUSEDOWNRIGHT5': (5, 5),
+        'MOUSEUP40': (0, -40), 'MOUSEDOWN40': (0, 40),
+        'MOUSELEFT40': (-40, 0), 'MOUSERIGHT40': (40, 0),
+        'MOUSEUPLEFT40': (-40, -40), 'MOUSEUPRIGHT40': (40, -40),
+        'MOUSEDOWNLEFT40': (-40, 40), 'MOUSEDOWNRIGHT40': (40, 40),
+        'MOUSEUP250': (0, -250), 'MOUSEDOWN250': (0, 250),
+        'MOUSELEFT250': (-250, 0), 'MOUSERIGHT250': (250, 0),
+        'MOUSEUPLEFT250': (-250, -250), 'MOUSEUPRIGHT250': (250, -250),
+        'MOUSEDOWNLEFT250': (-250, 250), 'MOUSEDOWNRIGHT250': (250, 250),
+    }
+    BUTTON_OPERATIONS = {
+        'MOUSECLICKLEFT': (('click', mouse.LEFT),),
+        'MOUSECLICKRIGHT': (('click', mouse.RIGHT),),
+        'MOUSEDBLCLICKLEFT': (('double_click', mouse.LEFT),),
+        'MOUSEDBLCLICKRIGHT': (('double_click', mouse.RIGHT),),
+        'MOUSECLKHLDLEFT': (('press', mouse.LEFT),),
+        'MOUSECLKHLDRIGHT': (('press', mouse.RIGHT),),
+        'MOUSERELEASEHOLD': (('release', mouse.LEFT), ('release', mouse.RIGHT)),
+    }
+
     def __init__(self, item, arg, label, key=None):
-        super(ActionLegacy, self).__init__(item)  # Pass required parameters
-        # Additional initialization for ActionLegacy
+        super().__init__(item)
         self.arg = arg
         self.label = label
         self.key = key
@@ -601,46 +452,17 @@ class ActionLegacy (Action):
 
 
     def perform(self):
-        logging.debug(f"[ActionLegacy] Key to press/release: {self.key}, type: {type(self.key)}")
-        action_map = {
-            'MOUSEUP5': lambda: moveMouse(0, -5),
-            'MOUSEDOWN5': lambda: moveMouse(0, 5),
-            'MOUSELEFT5': lambda: moveMouse(-5, 0),
-            'MOUSERIGHT5': lambda: moveMouse(5, 0),
-            'MOUSEUPLEFT5': lambda: moveMouse(-5, -5),
-            'MOUSEUPRIGHT5': lambda: moveMouse(5, -5),
-            'MOUSEDOWNLEFT5': lambda: moveMouse(-5, 5),
-            'MOUSEDOWNRIGHT5': lambda: moveMouse(5, 5),
-            'MOUSEUP40': lambda: moveMouse(0, -40),
-            'MOUSEDOWN40': lambda: moveMouse(0, 40),
-            'MOUSELEFT40': lambda: moveMouse(-40, 0),
-            'MOUSERIGHT40': lambda: moveMouse(40, 0),
-            'MOUSEUPLEFT40': lambda: moveMouse(-40, -40),
-            'MOUSEUPRIGHT40': lambda: moveMouse(40, -40),
-            'MOUSEDOWNLEFT40': lambda: moveMouse(-40, 40),
-            'MOUSEDOWNRIGHT40': lambda: moveMouse(40, 40),
-            'MOUSEUP250': lambda: moveMouse(0, -250),
-            'MOUSEDOWN250': lambda: moveMouse(0, 250),
-            'MOUSELEFT250': lambda: moveMouse(-250, 0),
-            'MOUSERIGHT250': lambda: moveMouse(250, 0),
-            'MOUSEUPLEFT250': lambda: moveMouse(-250, -250),
-            'MOUSEUPRIGHT250': lambda: moveMouse(250, -250),
-            'MOUSEDOWNLEFT250': lambda: moveMouse(-250, 250),
-            'MOUSEDOWNRIGHT250': lambda: moveMouse(250, 250),
-            'MOUSECLICKLEFT': lambda: clickMouse(mouse.LEFT, 'click'),
-            'MOUSECLICKRIGHT': lambda: clickMouse(mouse.RIGHT, 'click'),
-            'MOUSEDBLCLICKLEFT': lambda: mouse.double_click(button=mouse.LEFT),
-            'MOUSEDBLCLICKRIGHT': lambda: mouse.double_click(button=mouse.RIGHT),
-            'MOUSECLKHLDLEFT': lambda: clickMouse(mouse.LEFT, 'press'),
-            'MOUSECLKHLDRIGHT': lambda: clickMouse(mouse.RIGHT, 'press'),
-            'MOUSERELEASEHOLD': lambda: (clickMouse(mouse.LEFT, 'release'), clickMouse(mouse.RIGHT, 'release'))
-        }
-
-        # Execute the mapped function based on self.key if exists
-        if self.key and self.key in action_map:
-            action_map[self.key]()
-        else:
-            logging.debug(f"[ActionLegacy-perform] No action defined for key: {self.key}")
+        if self.key in self.MOVEMENTS:
+            moveMouse(*self.MOVEMENTS[self.key])
+            return
+        operations = self.BUTTON_OPERATIONS.get(self.key)
+        if operations is None:
+            raise ValueError('未支持的鼠标动作：' + str(self.key))
+        for operation, button in operations:
+            if operation == 'double_click':
+                mouse.double_click(button=button)
+            else:
+                clickMouse(button, operation)
 
 
 class KeyStroke:
@@ -675,60 +497,8 @@ class ActionKeyStroke(Action):
         return self.label
 
     def perform(self):
-        logging.debug(f"[ActionKeyStroke] Key to press/release: {self.key}, type: {type(self.key)}")
-        try:
-            text = self.window.key_output.send(
-                self.key, self.item.get('character'), modifier=self.toggle_action)
-            state = self.window.typestate
-            if state is None or text is None:
-                return
-            if text == '\b':
-                state.popchar()
-                return
-            state.pushstr(text)
-            # Expand complete words only on the dedicated typing page. The main
-            # keyboard and short numeric codes must emit their advertised keys.
-            if (self.window.layoutManager.active_layout_name != 'typing' or text != ' '
-                    or len(state.text) < 2 or state.text[-2].isspace()):
-                return
-            abbreviation, keylength = state.get_abbreviation()
-            if abbreviation is not None:
-                self.window.key_output.reset()
-                self.window.repeaton = False
-                for _ in range(keylength + 1):
-                    self.window.key_output.send('backspace', '\b')
-                    state.popchar()
-                state.pushstr(self.window.key_output.send_text(abbreviation + ' '))
-        except Exception as e:
-            logging.error(f"[ActionKeyStroke] Error during key press/release: {e}")
-            raise
-
-
-class ChangeLayoutAction(Action):
-    def __init__(self, item, change_layout_callback):
-        super().__init__(item)
-        self.change_layout_callback = change_layout_callback
-        self.layout_name = item['target']
-
-    def perform(self):
-        # Now call the callback with the stored layout name
-        if callable(self.change_layout_callback):
-            self.change_layout_callback(self.layout_name)
-        else:
-            raise ValueError("Change Layout callback is not callable")
-
-#     def __init__(self, item, window):
-#         super().__init__(item)
-#         self.window = window
-# 
-#     def perform(self):
-#         target_layout = self.item.get('target')
-#         if target_layout and target_layout in self.window.layoutManager.layouts:
-#             # Use the layout name to set the active layout
-#             self.window.layoutManager.set_active(target_layout)
-#             self.codeslayoutview.changeLayoutSignal.emit()
-#         else:
-#             raise ValueError(f"Layout '{target_layout}' not found")
+        self.window.key_output.send(
+            self.key, self.item.get('character'), modifier=self.toggle_action)
 
 
 class RepeatOnAction(Action):
@@ -751,7 +521,6 @@ class Window(QDialog):
         self.layoutManager = layoutManager
         self.configManager = configManager
         self.config = self.configManager.get_config()
-        self.typestate = None
         self.key_output = KeyboardOutput()
         self.actions = {}
         self.keystrokes = []
@@ -760,13 +529,7 @@ class Window(QDialog):
 
         self.listenerThread = None
         self.currentCharacter = []
-        self.previousCharacter = []
-        self.lastKeyDownTime = None
-        self.endCharacterTimer = None
-        self.inputDisabled = False
         self.codeslayoutview = None
-        self.fast_morse_mode_timer = None
-        self.repeat_character_timer = None
 
         self.repeaton = False
 
@@ -797,44 +560,25 @@ class Window(QDialog):
         return DEFAULT_CONFIG.copy()
 
     def init(self):
-        try:
-            self.layoutManager.set_code_profile(self.config.get('code_profile', 'morsey'))
-        except ValueError as error:
-            self.layoutManager.set_code_profile('legacy')
-            self.config['code_profile'] = 'legacy'
-            if hasattr(self, 'codeProfileComboBox'):
-                self.codeProfileComboBox.setCurrentIndex(self.codeProfileComboBox.findData('legacy'))
-            QMessageBox.warning(self, '电码冲突',
-                                '自定义码表与国际方案的编码冲突，已暂时使用旧版专用方案。\n'
-                                '请检查布局中的重复编码后再切换。\n\n' + str(error))
+        if self.layoutManager.layout_warning and not self._start_hidden:
+            warning = self.layoutManager.layout_warning
+            self.layoutManager.layout_warning = None
+            QMessageBox.warning(self, '旧布局已恢复',
+                                '旧布局含重复编码或不支持的动作，本次使用统一默认码表；原文件保留。\n\n' + warning)
         self.engine_timer.stop()
         self.audio.stop()
         self.engine = MorseEngine(self.config)
         self.configureAudio()
         self.resetOutput()
         self.currentCharacter = []
-        self.previousCharacter = []
         self.repeaton = False
-
-        logging.debug("[Window init] Setting active layout to: %s", self.layoutManager.main_layout_name)
-        preferred = self.config.get('guide_layout', self.layoutManager.main_layout_name)
-        if preferred not in self.layoutManager.layouts:
-            preferred = self.layoutManager.main_layout_name
-        self.layoutManager.set_active(preferred)
-        logging.debug("[Window init] Active layout successfully set to: %s", self.layoutManager.active_layout_name)
-        # Check for specific layout types that may require special handling
-        self.clearTextState()
-        self.initTypeState()
-        logging.debug(f"[Window init] layout that is active is: {self.layoutManager.main_layout_name} ")
         self.showCodeView()
-        logging.debug(f"[Window init] Initial visibility status: {self.codeslayoutview.isVisible()}")
 
     def postInit(self):
         # Initialize components that depend on actions being available
         self.actions = self.configManager.actions
         self.keystrokes = self.configManager.keystrokes
         self.keystrokemap = self.configManager.keystrokemap
-        #self.codeslayoutview = CodesLayoutViewWidget(self.layoutManager.get_active_layout(), self.config, self)
         self.createIconGroupBox()
         self.createActions()
         self.createTrayIcon()
@@ -942,50 +686,20 @@ class Window(QDialog):
         self.backToSettings()
         QMessageBox.warning(self, '输入设备不可用', message)
 
-    def clearTextState(self):
-        self.typestate = None
-
-    def initTypeState(self):
-        if self.typestate is None and self.layoutManager.active_layout_name in ('desktop', 'main', 'typing'):
-            self.abbreviations = load_abbreviations(os.path.join(get_user_data_dir(), 'abbreviations_en.txt'))
-            self.typestate = TypeState(self.abbreviations)
-
-    def changeLayout(self, layout_name):
-        if layout_name not in self.layoutManager.layouts:
-            raise ValueError(f"Unknown layout: {layout_name}")
-        self.engine.reset()
-        self.audio.stop()
-        for name in ('endCharacterTimer', 'fast_morse_mode_timer'):
-            timer = getattr(self, name)
-            if timer is not None:
-                timer.stop()
-                setattr(self, name, None)
-        self.currentCharacter = []
-        self.lastKeyDownTime = None
-        self.layoutManager.set_active(layout_name)
-        if self.codeslayoutview is not None:
-            self.codeslayoutview.hide()
-            self.codeslayoutview.deleteLater()
-        self.initTypeState()
-        self.showCodeView()
 
     def showCodeView(self):
-        view_class = VirtualKeyboardView if self.layoutManager.active_layout_name == 'desktop' else CodesLayoutViewWidget
-        view = view_class(self.layoutManager.get_active_layout(), self.config)
+        view = VirtualKeyboardView(self.layoutManager.get_active_layout(), self.config)
         # Keep a strong Python reference, but no native owner: an owned window
         # disappears from the Windows taskbar when the settings window hides.
-        # stopIt()/changeLayout() explicitly hide and delete each guide.
+        # stopIt() explicitly hides and deletes the guide.
         view.setWindowIcon(self.windowIcon())
         self.codeslayoutview = view
-        view.setAvailableLayouts(self.layoutManager.layouts, self.layoutManager.active_layout_name)
-        view.changeLayoutSignal.connect(self.changeLayout)
         view.settingsRequested.connect(self.backToSettings)
-        if isinstance(view, VirtualKeyboardView):
-            view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
-            view.autoFitChanged.connect(self.changeGuideAutoFit)
-            view.compactModeChanged.connect(self.changeGuideCompact)
-            view.compactScaleChanged.connect(self.changeGuideCompactScale)
-            view.guidePositionsChanged.connect(self.changeGuidePositions)
+        view.mouseVisibilityChanged.connect(self.changeMouseVisibility)
+        view.autoFitChanged.connect(self.changeGuideAutoFit)
+        view.compactModeChanged.connect(self.changeGuideCompact)
+        view.compactScaleChanged.connect(self.changeGuideCompactScale)
+        view.guidePositionsChanged.connect(self.changeGuidePositions)
         self.updateOutputState()
         if not self._start_hidden:
             view.show()
@@ -1049,16 +763,11 @@ class Window(QDialog):
         self.updateAudioProperties()
         self.updateOutputState()
 
-    def cycleLayout(self):
-        names = list(self.layoutManager.layouts)
-        current = names.index(self.layoutManager.active_layout_name)
-        self.changeLayout(names[(current + 1) % len(names)])
 
     def collect_config(self):
         config = {
             **self.config,
             'theme': self.themeComboBox.currentData(),
-            'code_profile': self.codeProfileComboBox.currentData(),
             'show_mouse': self.showMouseCheckBox.isChecked(),
             'guide_auto_fit': self.guideAutoFitCheckBox.isChecked(),
             'guide_compact': self.guideCompactCheckBox.isChecked(),
@@ -1099,7 +808,6 @@ class Window(QDialog):
             QMessageBox.warning(self, '设置无效', '请检查输入及声音设置。')
             return
         self.hide()
-        self.config['guide_layout'] = 'desktop'
         self.init()
         if not self.listenerThread:
             self.startKeyListener()
@@ -1124,7 +832,7 @@ class Window(QDialog):
         if self._shutting_down:
             return
         self._shutting_down = True
-        for cleanup in (self.guide_hotkey.stop, self.stopIt, self.clearTextState, self.resetOutput, self.audio.shutdown):
+        for cleanup in (self.guide_hotkey.stop, self.stopIt, self.resetOutput, self.audio.shutdown):
             try:
                 cleanup()
             except Exception:
@@ -1432,18 +1140,6 @@ class Window(QDialog):
             control.valueChanged.connect(self.previewAudioSettings)
         self.confirmationSoundCheck.toggled.connect(self.previewAudioSettings)
 
-        code_profile_row = QHBoxLayout()
-        code_profile_row.addWidget(QLabel('编码方案：'))
-        self.codeProfileComboBox = QComboBox()
-        from morse_profiles import CODE_PROFILE_LABELS, normalize_code_profile
-        for mode, label in CODE_PROFILE_LABELS.items():
-            self.codeProfileComboBox.addItem(label, mode)
-        self.codeProfileComboBox.setCurrentIndex(self.codeProfileComboBox.findData(
-            normalize_code_profile(self.config.get('code_profile'))))
-        self.codeProfileComboBox.setToolTip('国际摩斯优先：标准字符采用国际电码；电脑功能键使用扩展码。旧版专用保留原来的输入习惯。重新开始输入后生效。')
-        code_profile_row.addWidget(self.codeProfileComboBox, 1)
-        inputSettingsLayout.addLayout(code_profile_row)
-
         appearance_group = QGroupBox('外观')
         appearance = QGridLayout(appearance_group)
         appearance.addWidget(QLabel('界面主题：'), 0, 0)
@@ -1608,13 +1304,7 @@ class Window(QDialog):
         self.engine_timer.stop()
         self.engine.reset()
         self.audio.stop()
-        for name in ('endCharacterTimer', 'fast_morse_mode_timer', 'repeat_character_timer'):
-            timer = getattr(self, name)
-            if timer is not None:
-                timer.stop()
-                setattr(self, name, None)
         self.currentCharacter = []
-        self.lastKeyDownTime = None
         self.repeaton = False
         self.resetOutput()
         if self.codeslayoutview is not None:
@@ -1737,19 +1427,8 @@ class Window(QDialog):
         if self.codeslayoutview is not None:
             self.codeslayoutview.Dah()
 
-    def startEndCharacterTimer(self):
-        # Compatibility for callers requesting an explicit delayed commit.
-        if self.endCharacterTimer is None:
-            self.endCharacterTimer = QTimer(self)
-            self.endCharacterTimer.setSingleShot(True)
-            self.endCharacterTimer.timeout.connect(self.endCharacter)
-        self.endCharacterTimer.start(int(self.config.get('minLetterPause') or 3600 / self.config.get('wpm', 15)))
 
     def endCharacter(self):
-        if self.endCharacterTimer is not None:
-            self.endCharacterTimer.stop()
-            self.endCharacterTimer.deleteLater()
-            self.endCharacterTimer = None
         character, self.currentCharacter = self.currentCharacter, []
         success, label = self.handleMorseCode(character)
         if self.codeslayoutview is not None:
@@ -1788,269 +1467,6 @@ class Window(QDialog):
             return False, '执行失败，请查看诊断日志'
         finally:
             self.updateOutputState()
-
-class CodeRepresentation(QWidget):
-    def __init__(self, parent, code, item, c1, config):
-        super(CodeRepresentation, self).__init__(None)
-        self.config = config
-        #logging.debug("CodeRepresentation - Item: %s", item)
-        #logging.debug("CodeRepresentation - Config: %s", config)
-        vlayout = QVBoxLayout()
-        self.item = item
-        self.character = QLabel(self.item['_action'].getlabel())
-        self.character.setGeometry(10, 10, 10, 10)
-        self.character.setContentsMargins(0, 0, 0, 0)
-        self.character.setAlignment(Qt.AlignTop)
-        self.codeline = QLabel()
-        self.codeline.setAlignment(Qt.AlignTop)
-        self.codeline.setContentsMargins(0, 0, 0, 0)
-        self.codeline.move(20, 30)
-        self.code = self.codetocode(code)
-        vlayout.setContentsMargins(5, 5, 5, 5)
-        vlayout.addWidget(self.character)
-        vlayout.addWidget(self.codeline)
-        vlayout.setAlignment(self.character, Qt.AlignCenter)
-        vlayout.setAlignment(self.codeline, Qt.AlignCenter)
-        self.setLayout(vlayout)
-        self.setContentsMargins(0, 0, 0, 0)
-     #   self.show()
-        self.disabledchars = 0
-        self.is_enabled = True
-        self.character.setText(item['_action'].getlabel())
-        self.toggled = False
-        self.updateView()
-
-    def item_label(self):
-        action = self.item.get('_action')
-        return action.getlabel() if action is not None else ""
-
-    def codetocode(self, code):
-        toReturn = code.replace('1', '.')
-        toReturn = toReturn.replace('2', '-')
-        return toReturn;
-
-    def enable(self):
-        self.is_enabled = True
-        self.updateView()
-
-    def disable(self):
-        self.is_enabled = False
-        self.updateView()
-
-    def updateView (self):
-        enabled = self.is_enabled
-        codeselectrange = self.disabledchars if enabled  and self.disabledchars > 0 else 0
-        self.character.setDisabled(not enabled)
-        self.codeline.setDisabled(not enabled)
-        charfontsize = int(3.0 * self.config['fontsizescale'] / 100)
-        codefontsize = int(5.0 * self.config['fontsizescale'] / 100)
-        toggled = self.toggled
-        colors = THEME_COLORS
-        label = self.item_label().upper() if self.config['upperchars'] else self.item_label()
-        self.character.setText("<font style='background-color:{bgcolor};color:{color};font-weight:bold;' size='{fontsize}'>{text}</font>"
-                               .format(color=colors['highlight_text'] if toggled else colors['accent'] if enabled else colors['muted'],
-                                       text=escape(label),
-                                       fontsize=charfontsize, bgcolor=colors['highlight'] if toggled else "transparent"))
-        self.codeline.setText("<font size='{fontsize}'><font color='{selected}'>{selecttext}</font><font color='{color}'>{text}</font></font>"
-                              .format(text=self.code[codeselectrange:], selecttext=self.code[:codeselectrange],
-                                      selected=colors['success'], color=colors['danger'] if enabled else colors['muted'], fontsize=codefontsize))
-
-
-    def enabled(self):
-        return self.character.isEnabled()
-
-    def reset(self):
-        self.enable()
-        self.disabledchars = -1
-        self.tickDitDah()
-
-    def Dit(self):
-        #logging.debug(f"[CodeRepresentation] Attempting Dit. Enabled: {self.is_enabled}, Disabled Chars: {self.disabledchars}, Code Length: {len(self.code)}")
-        if (self.enabled()):
-            if ((self.disabledchars < len(self.code)) and self.code[self.disabledchars] == '.'):
-                self.tickDitDah()
-                #logging.debug("[CodeRepresentation] Dit successful.")
-            else:
-                self.disable()
-                #logging.debug("[CodeRepresentation] Dit failed - disabling.")
-
-    def Dah(self):
-        #logging.debug(f"[CodeRepresentation] Attempting Dah. Enabled: {self.is_enabled}, Disabled Chars: {self.disabledchars}, Code Length: {len(self.code)}")
-        if (self.enabled()):
-            if ((self.disabledchars < len(self.code)) and self.code[self.disabledchars] == '-'):
-                self.tickDitDah()
-                #logging.debug("[CodeRepresentation] Dah successful.")
-            else:
-                self.disable()
-                #logging.debug("[CodeRepresentation] Dah failed - disabling.")
-
-    def tickDitDah(self):
-        self.disabledchars += 1
-        if (self.disabledchars > len(self.code)):
-            self.is_enabled = False
-        self.updateView()
-
-
-class ColorIndicatorWidget(QLabel):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(16, 16)
-        self.set_color("green")
-
-    def set_color(self, color):
-        status_color = THEME_COLORS['success'] if color == "green" else THEME_COLORS['danger']
-        self.setStyleSheet(f"QLabel {{ background-color: {status_color}; border-radius: 8px; }}")
-
-
-class CodesLayoutViewWidget(QWidget):
-    feedbackSignal = pyqtSignal()
-    changeLayoutSignal = pyqtSignal(str)
-    settingsRequested = pyqtSignal()
-
-    def __init__(self, layout, config, parent=None):
-        super().__init__(parent)
-        self.layout = layout
-        self.config = config
-        self.status_bar = QStatusBar()
-        self.sound_indicator = ColorIndicatorWidget(self.status_bar)
-        self.status_bar.addPermanentWidget(self.sound_indicator)
-        self.setupLayout(layout)
-        self.setWindowTitle("摩斯码表")
-        self.setWindowIcon(QIcon(':/morse-writer.ico'))
-        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
-        available = QApplication.desktop().availableGeometry()
-        chart_size = self.chart_widget.sizeHint()
-        self.resize(min(max(chart_size.width() + 45, 480), available.width() - 40),
-                    min(chart_size.height() + 120, available.height() - 80))
-        self.adjustPosition()
-        self.escapeMorseModeListener = KeyCombinationListener()
-
-    def setAvailableLayouts(self, layouts, active):
-        names = {'desktop': '键盘与鼠标', 'main': '主键盘（完整）', 'typing': '字母与候选', 'mouse': '鼠标', 'number': '数字（短码）'}
-        self.layout_selector.blockSignals(True)
-        self.layout_selector.clear()
-        for key in layouts:
-            self.layout_selector.addItem(names.get(key, key), key)
-        self.layout_selector.setCurrentIndex(self.layout_selector.findData(active))
-        self.layout_selector.blockSignals(False)
-
-    def setOutputState(self, held_modifiers, locked):
-        held = set(held_modifiers)
-        sound = self.config.get('withsound', False)
-        self.sound_indicator.set_color('green' if sound else 'red')
-        parts = ['已暂停' if self.config.get('off', False) else '输入中',
-                 '提示音已开启' if sound else '提示音已关闭']
-        if locked:
-            parts.append('修饰键锁定已开启')
-        if held:
-            parts.append('已按住：' + ' + '.join(sorted(held)))
-        self.status_bar.showMessage(' · '.join(parts))
-        for item in self.crs.values():
-            action = item.item['_action']
-            item.toggled = ((isinstance(action, ActionKeyStroke) and action.toggle_action and action.key in held)
-                            or (isinstance(action, RepeatOnAction) and locked))
-            item.updateView()
-
-    def changeLayout(self, layout_name):
-        self.changeLayoutSignal.emit(layout_name)
-
-
-    def adjustPosition(self):
-        #logging.debug("Current config: %s", self.config)
-        ssize = QApplication.desktop().screenGeometry()
-        size = self.frameSize()
-        # Explicit conversion to int to ensure no float values slip through
-        x = int(self.config['winposx'])
-        y = int(self.config['winposy'])
-
-        if self.config['winxaxis'] == 'left':
-            x_position = x
-        else:
-            x_position = ssize.width() - size.width() - x
-
-        if self.config['winyaxis'] == 'top':
-            y_position = y
-        else:
-            y_position = ssize.height() - size.height() - y
-
-        self.move(x_position, y_position)
-
-    def setupLayout(self, layout):
-        self.vlayout = QVBoxLayout(self)
-        navigation = QHBoxLayout()
-        navigation.addWidget(QLabel('当前码表：'))
-        self.layout_selector = QComboBox()
-        self.layout_selector.setToolTip('切换页面查看对应键位；各页面使用各自的摩斯编码。')
-        self.layout_selector.activated.connect(
-            lambda index: self.changeLayoutSignal.emit(self.layout_selector.itemData(index)))
-        navigation.addWidget(self.layout_selector, 1)
-        settings_button = QPushButton('返回设置')
-        settings_button.clicked.connect(self.settingsRequested.emit)
-        navigation.addWidget(settings_button)
-        self.vlayout.addLayout(navigation)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.chart_widget = QWidget()
-        chart_layout = QVBoxLayout(self.chart_widget)
-        hlayout = QHBoxLayout()
-        hlayout.setContentsMargins(0, 0, 0, 0)
-        chart_layout.addLayout(hlayout)
-        self.keystroke_crs_map = {}
-        self.crs = {}
-        perrow = layout['column_len']
-        for index, item in enumerate(layout['items']):
-            if not item.get('emptyspace', False):
-                coderep = CodeRepresentation(None, item['code'], item, 'Green', self.config)
-                if isinstance(item['_action'], ActionKeyStroke):
-                    self.keystroke_crs_map[item['_action'].name] = coderep
-                self.crs[item['code']] = coderep
-                hlayout.addWidget(coderep)
-            if (index + 1) % perrow == 0:
-                hlayout = QHBoxLayout()
-                hlayout.setContentsMargins(0, 0, 0, 0)
-                chart_layout.addLayout(hlayout)
-        self.scroll_area.setWidget(self.chart_widget)
-        self.vlayout.addWidget(self.scroll_area)
-        self.vlayout.addWidget(self.status_bar)
-
-
-    def Dit(self):
-        for item in self.crs.values():
-            item.Dit()
-
-    def Dah(self):
-        for item in self.crs.values():
-            item.Dah()
-
-    def reset(self):
-        for item in self.crs.values():
-            item.reset()
-
-    def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-
-    def keyPressEvent(self, event):
-        if self.escapeMorseModeListener.keyPressEvent(event):
-            self.settingsRequested.emit()
-        else:
-            super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event):
-        self.escapeMorseModeListener.keyReleaseEvent(event)
-
-    def updateSoundSupport(self):
-        return True
-
-def get_keystroke_state(name):
-    state = {
-        "down": keyboard.is_pressed(name)
-    }
-    # Special case handling for CAPS LOCK which needs to check toggle state
-    if name.lower() == "capslock":
-        state["locked"] = keyboard.is_pressed('caps lock')
-    return state
 
 
 class ChineseUiTranslator(QTranslator):
@@ -2107,8 +1523,7 @@ if __name__ == '__main__':
 
     # Initialize managers
     configmanager = ConfigManager(os.path.join(user_data_dir, "config.json"), default_config=DEFAULT_CONFIG)
-    layoutmanager = LayoutManager(os.path.join(user_data_dir, "layouts.json"),
-                                  configmanager.get_config().get('code_profile', 'morsey'))
+    layoutmanager = LayoutManager(os.path.join(user_data_dir, "layouts.json"))
 
     # Create main window
     window = Window(layoutManager=layoutmanager, configManager=configmanager)

@@ -16,7 +16,7 @@ a = Analysis(
     hiddenimports=['PyQt5.sip', 'keyboard._winkeyboard'],
     hookspath=[],
     runtime_hooks=[],
-    excludes=['tkinter', 'nava'],
+    excludes=['tkinter'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
