@@ -17,6 +17,15 @@ _ALIASES = {
 _MODIFIERS = {"shift", "ctrl", "alt", "windows"}
 _SHIFTED_DIGITS = dict(zip("1234567890", "!@#$%^&*()"))
 _LITERAL_KEYS = {" ": "space", "\t": "tab", "\n": "enter", "\r": "enter", "\b": "backspace"}
+_PINYIN_SYMBOL_KEYS = {
+    '.': ('.',), ',': (',',), '?': ('shift', '/'), '!': ('shift', '1'),
+    ':': ('shift', ';'), ';': (';',), "'": ("'",), '"': ('shift', "'"),
+    '(': ('shift', '9'), ')': ('shift', '0'), '/': ('/',), '\\': ('\\',),
+    '`': ('`',), '@': ('shift', '2'), '#': ('shift', '3'), '$': ('shift', '4'),
+    '%': ('shift', '5'), '&': ('shift', '7'), '*': ('shift', '8'),
+    '+': ('shift', '='), '-': ('-',), '=': ('=',), '_': ('shift', '-'),
+    '<': ('shift', ','), '>': ('shift', '.'), '^': ('shift', '6'),
+}
 
 
 def _normalize(key):
@@ -130,6 +139,14 @@ class KeyboardOutput:
         for character in text:
             self._send_key([character])
         return text
+
+    def send_pinyin_symbol(self, character):
+        """Send one US symbol key through the IME's punctuation conversion."""
+        if not isinstance(character, str) or character not in _PINYIN_SYMBOL_KEYS:
+            raise ValueError('拼音层符号必须来自符号码表')
+        self.reset()
+        self._send_key(_PINYIN_SYMBOL_KEYS[character])
+        return character
 
     def send(self, key, character=None, modifier=False) -> str | None:
         """Send an action, consuming one-shot modifiers after a normal key.

@@ -53,7 +53,7 @@ class FrozenInterfaceProbeTests(TestCase):
                              return_value=ui.morse.QtCore.QRect(0, 0, 2200, 1400)):
             result = verify_interface_features(window)
         self.assertEqual(result['hotkey_preset'], 'F22')
-        self.assertEqual(result['pinyin_layer']['actions'], 116)
+        self.assertEqual(result['pinyin_layer']['actions'], 142)
         self.assertEqual(result['pinyin_layer']['modes'], ['hold', 'toggle'])
         self.assertTrue(result['transparent_gap'] and result['painted_key'] and result['restored'])
         self.assertTrue(result['scale_saved'])

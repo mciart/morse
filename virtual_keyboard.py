@@ -818,6 +818,13 @@ class VirtualKeyboardView(QWidget):
             section.addStretch()
             sounds.addLayout(section, columns)
         keyboard.addLayout(sounds)
+        keyboard.addWidget(self._title('符号'))
+        symbols = QGridLayout()
+        symbols.setSpacing(5)
+        items = [item for item in self._items if item.get('pinyin_group') == 'symbol']
+        for index, item in enumerate(items):
+            symbols.addWidget(self._cap(item['action'], compact=True, item=item), index // 13, index % 13)
+        keyboard.addLayout(symbols)
         keyboard.addWidget(self._title('选字与编辑'))
         controls = QGridLayout()
         controls.setSpacing(5)

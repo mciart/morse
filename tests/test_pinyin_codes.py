@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 
 from pinyin_codes import build_pinyin_layout
+from tools.generate_codechart import read_key_data
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -50,7 +51,7 @@ class PinyinCodeTests(unittest.TestCase):
                 self.assertNotIn('extension', actual[zhuyin])
 
     def test_every_action_and_code_is_unique_with_mouse_enabled(self):
-        self.assertEqual(len(self.items), 116)
+        self.assertEqual(len(self.items), 142)
         self.assertEqual(len(self.by_action), len(self.items))
         self.assertEqual(len({item['code'] for item in self.items}), len(self.items))
         for item in self.items:
@@ -58,6 +59,7 @@ class PinyinCodeTests(unittest.TestCase):
             self.assertLessEqual(set(item['code']), {'1', '2'})
         self.assertEqual(sum(item['pinyin_group'] == 'initial' for item in self.items), 23)
         self.assertEqual(sum(item['pinyin_group'] == 'final' for item in self.items), 35)
+        self.assertEqual(sum(item['pinyin_group'] == 'symbol' for item in self.items), 26)
 
     def test_complete_spelling_examples_without_ime_backtracking(self):
         cases = {
@@ -91,7 +93,8 @@ class PinyinCodeTests(unittest.TestCase):
         for item in self.items:
             if item.get('extension'):
                 self.assertNotIn(item['code'], original_codes)
-                self.assertLessEqual(len(item['code']), 6)
+                self.assertLessEqual(len(item['code']),
+                                     7 if item['pinyin_group'] == 'symbol' else 6)
         self.assertTrue(self.by_action['PINYIN_Y']['extension'])
         self.assertTrue(self.by_action['PINYIN_ING']['extension'])
 
@@ -119,7 +122,7 @@ class PinyinCodeTests(unittest.TestCase):
         actual_mice = [item for item in result['items'] if item['pinyin_group'] == 'mouse']
         self.assertEqual(len(actual_mice), 31)
         for item in result['items']:
-            if item['pinyin_group'] not in ('mouse', 'control'):
+            if item['pinyin_group'] not in ('mouse', 'control', 'symbol'):
                 continue
             original = expected[item['action']]
             self.assertIs(item['_action'], original['_action'])
@@ -138,6 +141,60 @@ class PinyinCodeTests(unittest.TestCase):
         one['custom']['value'].append(3)
         one['label'] = '新标签'
         self.assertEqual(self.english, before)
+
+    def test_all_26_printable_symbols_keep_english_actions_and_nonconflicting_codes(self):
+        symbols = {
+            'DOT', 'COMMA', 'QUESTION', 'EXCLAMATION', 'COLON', 'SEMICOLON',
+            'AT', 'HASH', 'DOLLAR', 'PERCENT', 'AMPERSAND', 'STAR', 'PLUS',
+            'MINUS', 'EQUALS', 'FSLASH', 'BSLASH', 'SINGLEQUOTE', 'DOUBLEQUOTE',
+            'OPENBRACKET', 'CLOSEBRACKET', 'LESSTHAN', 'MORETHAN', 'CIRCONFLEX',
+            'UNDERSCORE', 'BACKTICK',
+        }
+        replacements = {
+            'QUESTION': '1111112', 'HASH': '1111121', 'AMPERSAND': '1111122',
+            'PLUS': '1111211', 'EQUALS': '1111212', 'FSLASH': '1111221',
+            'OPENBRACKET': '1111222',
+        }
+        actual = {item['action']: item for item in self.items
+                  if item['pinyin_group'] == 'symbol'}
+        self.assertEqual(set(actual), symbols)
+        original = {item['action']: item for item in self.english['items']}
+        definitions = read_key_data(PROJECT / 'MorseCodeGUI.py')
+        for action, item in actual.items():
+            with self.subTest(action=action):
+                self.assertNotIn('pinyin_text', item)
+                self.assertEqual(item['pinyin_symbol'], definitions[action]['character'])
+                self.assertIn('中文标点由当前输入法的标点模式决定', item['tooltip'])
+                self.assertEqual(item['code'], replacements.get(action, original[action]['code']))
+                self.assertEqual(bool(item.get('extension')), action in replacements)
+
+    def test_adding_symbols_never_reassigns_existing_pinyin_controls_or_mouse(self):
+        no_symbols = deepcopy(self.english)
+        included = {item['action'] for item in self.items if item['pinyin_group'] != 'symbol'}
+        no_symbols['items'] = [item for item in no_symbols['items'] if item['action'] in included]
+        baseline = build_pinyin_layout(no_symbols)
+        self.assertEqual(len(baseline['items']), 116)
+        self.assertEqual(baseline['items'],
+                         [item for item in self.items if item['pinyin_group'] != 'symbol'])
+
+    def test_custom_symbols_are_order_independent_and_cannot_steal_reserved_codes(self):
+        for item in self.english['items']:
+            if item['action'] == 'DOT':
+                item['code'] = '1111112'  # Occupies the default question extension.
+            elif item['action'] == 'COMMA':
+                item['code'] = binary('---')  # Conflicts with Pinyin a.
+        first = build_pinyin_layout(self.english)
+        reordered = deepcopy(self.english)
+        reordered['items'].reverse()
+        second = build_pinyin_layout(reordered)
+        self.assertEqual({item['action']: item['code'] for item in first['items']},
+                         {item['action']: item['code'] for item in second['items']})
+        symbols = {item['action']: item for item in first['items'] if item['pinyin_group'] == 'symbol'}
+        self.assertEqual(symbols['DOT']['code'], '1111112')
+        self.assertNotEqual(symbols['QUESTION']['code'], '1111112')
+        self.assertNotEqual(symbols['COMMA']['code'], binary('---'))
+        self.assertGreaterEqual(len(symbols['COMMA']['code']), 7)
+        self.assertEqual(len({item['code'] for item in first['items']}), len(first['items']))
 
     def test_custom_controls_keep_free_codes_and_relocate_conflicts_deterministically(self):
         for item in self.english['items']:

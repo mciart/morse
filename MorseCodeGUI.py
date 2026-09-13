@@ -11,7 +11,7 @@ from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt, QLocale, QTranslator, QLibraryInfo
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout, QSpinBox,
-                             QGroupBox, QHBoxLayout, QLabel, QMessageBox,
+                             QGroupBox, QHBoxLayout, QLabel, QMessageBox, QButtonGroup,
                              QPushButton, QRadioButton, QSystemTrayIcon, QVBoxLayout,
                              QWidget, QApplication, QMenu, QScrollArea, QKeySequenceEdit)
 import keyboard
@@ -25,6 +25,8 @@ from morse_engine import MorseEngine
 from input_listener import KeyListenerThread
 from guide_gesture import GuideKeyListener, HoldTapGesture, normalize_guide_key
 from pinyin_codes import build_pinyin_layout
+from ime_sync import ImeSynchronizer
+from settings_layout import SettingsWindowSizer, ResponsiveSettingsRow, ResponsiveSettingsForm
 from tone_audio import ToneAudio
 from windows_integration import (StartupRegistration, GlobalHotkey, parse_hotkey,
                                  DEFAULT_GLOBAL_HOTKEY, show_guide_without_activation)
@@ -66,6 +68,7 @@ DEFAULT_CONFIG = {
   "pinyin_layer_enabled": True,
   "pinyin_layer_key": "F22",
   "pinyin_layer_mode": "hold",
+  "pinyin_ime_sync": False,
   "winxaxis": "left",
   "winyaxis": "top",
   "winposx": 10,
@@ -558,6 +561,12 @@ class Window(QDialog):
         self._pending_input = []
         self._draining_input = False
         self._pinyin_layout = None
+        self.ime_sync = ImeSynchronizer(self)
+        self.ime_sync.stateChanged.connect(self.imeStateChanged)
+        self.ime_sync.requestFinished.connect(self.imeRequestFinished)
+        self._ime_request = None
+        self._ime_pending_codes = []
+        self._ime_deferred_layer = None
         self.guide_key_timer = QTimer(self)
         self.guide_key_timer.setInterval(10)
         self.guide_key_timer.timeout.connect(self.drainInput)
@@ -615,7 +624,7 @@ class Window(QDialog):
         self.settings_scroll.setWidget(self.iconGroupBox)
         mainLayout.addWidget(self.settings_scroll, 1)
         self.settings_actions = QWidget()
-        buttons = QHBoxLayout(self.settings_actions)
+        buttons = ResponsiveSettingsRow(self.settings_actions)
         buttons.setContentsMargins(0, 0, 0, 0)
         for button in (self.DeviceButton, self.SaveButton, self.GOButton):
             buttons.addWidget(button)
@@ -626,9 +635,8 @@ class Window(QDialog):
         self.updateTrayInputState()
         self.setWindowTitle("摩斯输入设置")
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
-        self.setMinimumSize(320, 240)
-        available = QApplication.desktop().availableGeometry(self)
-        self.resize(min(460, available.width() - 32), min(680, available.height() - 64))
+        self.settings_sizer = SettingsWindowSizer(
+            self, self.settings_scroll, self.settings_actions)
 
 
     def get_configured_keys(self):
@@ -671,6 +679,7 @@ class Window(QDialog):
             self.listenerThread.listenerError.connect(self.inputError)
             self.listenerThread.start()
             self.engine_timer.start()
+        self.applyImeSync()
         self.updateTrayInputState()
 
 
@@ -813,7 +822,8 @@ class Window(QDialog):
             'guide_hotkey': self.selectedGuideHotkey(),
             'pinyin_layer_enabled': self.pinyinLayerCheck.isChecked(),
             'pinyin_layer_key': self.selectedPinyinKey(),
-            'pinyin_layer_mode': self.pinyinModeComboBox.currentData(),
+            'pinyin_layer_mode': self.selectedPinyinMode(),
+            'pinyin_ime_sync': self.imeSyncCheck.isChecked(),
             'fastMorseMode': self.fastMorseModeCheckbox.isChecked() if self.keySelectionRadioOneKey.isChecked() is False else False,
         }
         return config
@@ -859,7 +869,7 @@ class Window(QDialog):
         if self._shutting_down:
             return
         self._shutting_down = True
-        for cleanup in (self.guide_key_timer.stop, self.guide_key.stop,
+        for cleanup in (self.ime_sync.stop, self.guide_key_timer.stop, self.guide_key.stop,
                         self.guide_hotkey.stop, self.stopIt, self.resetOutput, self.audio.shutdown):
             try:
                 cleanup()
@@ -906,6 +916,9 @@ class Window(QDialog):
         self._desktop_integration_started = True
         self.applyGuideHotkey()
 
+    def selectedPinyinMode(self):
+        return 'toggle' if self.pinyinToggleRadio.isChecked() else 'hold'
+
     def selectedPinyinKey(self):
         key = normalize_guide_key(self.pinyinKeyComboBox.currentData())
         if self.pinyinLayerCheck.isChecked():
@@ -926,7 +939,8 @@ class Window(QDialog):
             self.pinyinKeyError(str(error))
             return
         values = dict(pinyin_layer_enabled=self.pinyinLayerCheck.isChecked(), pinyin_layer_key=key,
-                      pinyin_layer_mode=self.pinyinModeComboBox.currentData())
+                      pinyin_layer_mode=self.selectedPinyinMode(),
+                      pinyin_ime_sync=self.imeSyncCheck.isChecked())
         self.config.update(values)
         self.configManager.config.update(values)
         self.configManager.save_config(self.configManager.config)
@@ -952,11 +966,28 @@ class Window(QDialog):
         self.layer_gesture.reset()
         self._sequence_pinyin = None
         self._pending_input = []
-        self.setPinyinLayer(False)
+        self.ime_sync.stop()
+        self._ime_request = None
+        self._ime_pending_codes = []
+        self._ime_deferred_layer = None
+        self.setPinyinLayer(False, sync_ime=False)
 
-    def setPinyinLayer(self, enabled):
+    def setPinyinLayer(self, enabled, *, sync_ime=True):
         enabled = bool(enabled and self.listenerThread is not None
                        and not self.config.get('off', False))
+        if sync_ime and self.ime_sync.enabled:
+            if self._sequence_pinyin is not None or self._ime_pending_codes:
+                # The next code/display changes immediately, while previously
+                # started codes finish in their own mode before the IME write.
+                self._ime_deferred_layer = enabled
+            else:
+                self._ime_deferred_layer = None
+                state = self.ime_sync.latest
+                current = state is not None and self.ime_sync.target_matches(state)
+                if not (self._ime_request is None and current and state.is_pinyin is True and
+                        state.chinese == enabled and state.process_id != os.getpid()):
+                    self._ime_request = self.ime_sync.request(enabled, state if current else None)
+                    self.imeSyncStatus.setText('正在同步微软拼音…')
         changed = enabled != self._pinyin_layer
         self._pinyin_layer = enabled
         if changed and enabled:
@@ -977,6 +1008,78 @@ class Window(QDialog):
                 self._layer_blocked = False
             return
         self.processGestureEvents(self.layer_gesture.key(pressed, timestamp))
+
+    def applyImeSync(self):
+        enabled = bool(self.config.get('pinyin_ime_sync', False) and
+                       self._desktop_integration_started and self.listenerThread is not None
+                       and not self.config.get('off', False))
+        if enabled:
+            if not self.ime_sync.enabled:
+                self.imeSyncStatus.setText('同步已开启，等待当前输入窗口。')
+                self.ime_sync.start()
+        else:
+            self.ime_sync.stop()
+            self._ime_request = None
+            self._ime_pending_codes = []
+            self._ime_deferred_layer = None
+            self.imeSyncStatus.setText('开始输入后同步微软拼音。' if self.config.get('pinyin_ime_sync')
+                                       else '微软拼音同步已关闭。')
+
+    def imeStateChanged(self, state):
+        if self._shutting_down or not self.ime_sync.enabled:
+            return
+        if state is not None and state.process_id == os.getpid():
+            return  # Settings/guide focus is not the user's target input field.
+        if state is None or state.is_pinyin is not True or state.chinese is None:
+            self.imeSyncStatus.setText('当前窗口未能识别微软拼音；请切到微软拼音输入框。')
+            return
+        self.imeSyncStatus.setText('正在同步：微软拼音 · ' + ('中文' if state.chinese else '英文'))
+        if self._ime_request is None and self._sequence_pinyin is None:
+            self.layer_gesture.sync_layer(state.chinese)
+            self.setPinyinLayer(state.chinese, sync_ime=False)
+
+    def imeRequestFinished(self, serial, result):
+        if self._shutting_down or not self.ime_sync.enabled or serial != self._ime_request:
+            return
+        self._ime_request = None
+        state = result.state
+        if not result.ok or not self.ime_sync.target_matches(state):
+            self._ime_pending_codes = []
+            self._ime_deferred_layer = None
+            actual = bool(state is not None and self.ime_sync.target_matches(state)
+                          and state.is_pinyin is True and state.chinese)
+            self.layer_gesture.sync_layer(actual)
+            self.setPinyinLayer(actual, sync_ime=False)
+            self.imeSyncStatus.setText('同步失败：请确认当前窗口使用微软拼音，且权限一致。')
+            if self.codeslayoutview is not None:
+                self.codeslayoutview.showMessage('输入法同步失败，本次电码未发送', False)
+            return
+        while self._ime_pending_codes:
+            character, layer = self._ime_pending_codes[0]
+            if state.chinese != layer:
+                self._ime_request = self.ime_sync.request(layer, state)
+                break
+            self._ime_pending_codes.pop(0)
+            previous = self._sequence_pinyin
+            self._sequence_pinyin = layer
+            try:
+                success, label = self.handleMorseCode(character, ime_confirmed=True)
+                if self.codeslayoutview is not None:
+                    self.codeslayoutview.showResult(label, success)
+                self.audio.confirm(success)
+            finally:
+                self._sequence_pinyin = previous
+        self.finishImeLayerChange()
+        self.imeStateChanged(state)
+
+    def finishImeLayerChange(self):
+        if self._ime_request is not None or self._ime_pending_codes or self._sequence_pinyin is not None:
+            return
+        if self._ime_deferred_layer is not None:
+            desired, self._ime_deferred_layer = self._ime_deferred_layer, None
+            self.setPinyinLayer(desired)
+        elif self.ime_sync.enabled:
+            self.imeStateChanged(self.ime_sync.latest)
 
     def processGestureEvents(self, events):
         for kind, value in events or ():
@@ -1064,6 +1167,7 @@ class Window(QDialog):
             self.guide_key_timer.start() if layer_key else self.guide_key_timer.stop()
             if layer_error:
                 self.pinyinKeyError(layer_error)
+            self.applyImeSync()
             sequence = self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)
             if sequence:
                 inputs = [self.config.get(name) for name in
@@ -1149,14 +1253,14 @@ class Window(QDialog):
         inputSettingsLayout = QVBoxLayout()
 
         inputRadioGroup = QGroupBox("按键数量")
-        inputRadioButtonsLayout = QHBoxLayout()
+        inputRadioButtonsLayout = ResponsiveSettingsRow()
         inputRadioButtonsLayout.addWidget(self.keySelectionRadioOneKey)
         inputRadioButtonsLayout.addWidget(self.keySelectionRadioTwoKey)
         inputRadioButtonsLayout.addWidget(self.keySelectionRadioThreeKey)
         inputRadioGroup.setLayout(inputRadioButtonsLayout)
         inputSettingsLayout.addWidget(inputRadioGroup)
 
-        inputKeyComboBoxesLayout = QHBoxLayout()
+        inputKeyComboBoxesLayout = ResponsiveSettingsRow()
 
         # Filter the keystrokes to only include those keys that are specified in morse_keys
         morse_keys = ["SPACE", "ENTER", "ONE", "TWO", "Z", "F8", "F9", "RCTRL", "LCTRL", "RSHIFT", "LSHIFT", "ALT", "CTRL"]
@@ -1207,7 +1311,7 @@ class Window(QDialog):
         self.fastMorseModeCheckbox = QCheckBox('自动电键：长按连发、双键交替')
         self.fastMorseModeCheckbox.setChecked(self.config.get('keyer_mode', 'manual') == 'iambic')
         inputSettingsLayout.addWidget(self.fastMorseModeCheckbox)
-        speed_layout = QHBoxLayout()
+        speed_layout = ResponsiveSettingsRow()
         speed_layout.addWidget(QLabel('点划速度：'))
         self.wpmEdit = QSpinBox()
         self.wpmEdit.setRange(5, 60)
@@ -1229,7 +1333,7 @@ class Window(QDialog):
                                              for name in ('maxDitTime', 'minLetterPause')))
         inputSettingsLayout.addWidget(self.customTimingCheck)
         self.customTimingPanel = QWidget()
-        timing_layout = QGridLayout(self.customTimingPanel)
+        timing_layout = ResponsiveSettingsForm(self.customTimingPanel)
         timing_layout.setContentsMargins(0, 0, 0, 0)
         self.maxDitTimeLabel = QLabel('单键点划分界：')
         self.maxDitTimeEdit = QSpinBox()
@@ -1245,21 +1349,21 @@ class Window(QDialog):
         self.minLetterPauseEdit.setValue(round(float(self.config.get('minLetterPause', 0))))
         self.minLetterPauseEdit.valueChanged.connect(self.updateTimingSummary)
         self.minLetterPauseEdit.setToolTip('设为 0 使用标准间隔；较大的数值增加输入容错。三键模式由第三键确认。')
-        timing_layout.addWidget(self.maxDitTimeLabel, 0, 0)
-        timing_layout.addWidget(self.maxDitTimeEdit, 0, 1)
-        timing_layout.addWidget(self.minLetterPauseLabel, 1, 0)
-        timing_layout.addWidget(self.minLetterPauseEdit, 1, 1)
+        timing_layout.addRow(self.maxDitTimeLabel, self.maxDitTimeEdit)
+        timing_layout.addRow(self.minLetterPauseLabel, self.minLetterPauseEdit)
         inputSettingsLayout.addWidget(self.customTimingPanel)
         self.customTimingCheck.toggled.connect(self.updateFastMorseModeAvailability)
 
         sound_group = QGroupBox('声音')
-        sound_layout = QGridLayout(sound_group)
+        sound_layout = ResponsiveSettingsForm(sound_group)
         self.withSound = QCheckBox('播放摩斯音')
         self.withSound.setChecked(self.config.get('withsound', True))
-        sound_layout.addWidget(self.withSound, 0, 0)
         self.previewToneButton = QPushButton('试听')
         self.previewToneButton.clicked.connect(self.previewMorseTone)
-        sound_layout.addWidget(self.previewToneButton, 0, 1)
+        sound_controls = ResponsiveSettingsRow()
+        sound_controls.addWidget(self.withSound, 1)
+        sound_controls.addWidget(self.previewToneButton)
+        sound_layout.addRow(sound_controls)
         self.toneFrequencyEdit = QSpinBox()
         self.toneFrequencyEdit.setRange(200, 1200)
         self.toneFrequencyEdit.setSuffix(' Hz')
@@ -1270,47 +1374,91 @@ class Window(QDialog):
         self.toneVolumeEdit.setValue(int(self.config.get('tone_volume', 30)))
         self.confirmationSoundCheck = QCheckBox('字符完成与无效码提示音')
         self.confirmationSoundCheck.setChecked(self.config.get('confirmation_sound', False))
-        sound_layout.addWidget(QLabel('音高：'), 1, 0)
-        sound_layout.addWidget(self.toneFrequencyEdit, 1, 1)
-        sound_layout.addWidget(QLabel('音量：'), 2, 0)
-        sound_layout.addWidget(self.toneVolumeEdit, 2, 1)
-        sound_layout.addWidget(self.confirmationSoundCheck, 3, 0, 1, 2)
+        sound_layout.addRow('音高：', self.toneFrequencyEdit)
+        sound_layout.addRow('音量：', self.toneVolumeEdit)
+        sound_layout.addRow(self.confirmationSoundCheck)
         inputSettingsLayout.addWidget(sound_group)
         for control in (self.toneFrequencyEdit, self.toneVolumeEdit):
             control.valueChanged.connect(self.previewAudioSettings)
         self.confirmationSoundCheck.toggled.connect(self.previewAudioSettings)
 
         appearance_group = QGroupBox('外观')
-        appearance = QGridLayout(appearance_group)
-        appearance.addWidget(QLabel('界面主题：'), 0, 0)
+        appearance = ResponsiveSettingsForm(appearance_group)
         self.themeComboBox = QComboBox()
         for label, mode in (('跟随系统', 'system'), ('浅色', 'light'), ('深色', 'dark')):
             self.themeComboBox.addItem(label, mode)
         self.themeComboBox.setCurrentIndex(max(0, self.themeComboBox.findData(self.config.get('theme', 'system'))))
         self.themeComboBox.currentIndexChanged.connect(self.changeTheme)
-        appearance.addWidget(self.themeComboBox, 0, 1)
+        appearance.addRow('界面主题：', self.themeComboBox)
         self.guideAutoFitCheckBox = QCheckBox('码表自动适应窗口')
         self.guideAutoFitCheckBox.setChecked(self.config.get('guide_auto_fit', True))
         self.guideAutoFitCheckBox.clicked.connect(self.changeGuideAutoFit)
-        appearance.addWidget(self.guideAutoFitCheckBox, 1, 0)
         self.showMouseCheckBox = QCheckBox('显示鼠标对照')
         self.showMouseCheckBox.setChecked(self.config.get('show_mouse', False))
         self.showMouseCheckBox.clicked.connect(self.changeMouseVisibility)
-        appearance.addWidget(self.showMouseCheckBox, 1, 1)
+        guide_options = ResponsiveSettingsRow()
+        guide_options.addWidget(self.guideAutoFitCheckBox)
+        guide_options.addWidget(self.showMouseCheckBox)
+        appearance.addRow(guide_options)
         self.fontSizeScaleLabel = QLabel('码表缩放：')
         self.fontSizeScaleEdit = QSpinBox()
         self.fontSizeScaleEdit.setRange(10, max(300, round(float(self.config.get('fontsizescale', 100)))))
         self.fontSizeScaleEdit.setSuffix(' %')
         self.fontSizeScaleEdit.setValue(round(float(self.config.get('fontsizescale', 100))))
-        appearance.addWidget(self.fontSizeScaleLabel, 2, 0)
-        appearance.addWidget(self.fontSizeScaleEdit, 2, 1)
+        appearance.addRow(self.fontSizeScaleLabel, self.fontSizeScaleEdit)
         self.guideCompactCheckBox = QCheckBox('精简显示：仅保留透明键位叠加层')
         self.guideCompactCheckBox.setChecked(self.config.get('guide_compact', False))
         self.guideCompactCheckBox.clicked.connect(self.changeGuideCompact)
-        appearance.addWidget(self.guideCompactCheckBox, 3, 0, 1, 2)
+        appearance.addRow(self.guideCompactCheckBox)
         self.guideAutoFitCheckBox.toggled.connect(self.updateGuideScaleAvailability)
         self.updateGuideScaleAvailability()
         inputSettingsLayout.addWidget(appearance_group)
+
+        pinyin_group = QGroupBox('拼音与码表切换')
+        pinyin_layout = QVBoxLayout(pinyin_group)
+        self.pinyinLayerCheck = QCheckBox('启用拼音层按键（双击显示／隐藏码表）')
+        self.pinyinLayerCheck.setChecked(self.config.get('pinyin_layer_enabled', True))
+        self.pinyinLayerCheck.setEnabled(self.guide_key.supported)
+        pinyin_layout.addWidget(self.pinyinLayerCheck)
+        pinyin_row = ResponsiveSettingsRow()
+        self.pinyinModeButtons = QButtonGroup(self)
+        self.pinyinHoldRadio = QRadioButton('按住使用')
+        self.pinyinToggleRadio = QRadioButton('单击切换')
+        self.pinyinModeButtons.addButton(self.pinyinHoldRadio)
+        self.pinyinModeButtons.addButton(self.pinyinToggleRadio)
+        self.pinyinHoldRadio.setChecked(self.config.get('pinyin_layer_mode') != 'toggle')
+        self.pinyinToggleRadio.setChecked(self.config.get('pinyin_layer_mode') == 'toggle')
+        mode_row = ResponsiveSettingsRow()
+        mode_row.addWidget(QLabel('切换方式：'))
+        mode_row.addWidget(self.pinyinHoldRadio)
+        mode_row.addWidget(self.pinyinToggleRadio)
+        pinyin_layout.addLayout(mode_row)
+        pinyin_row.addWidget(QLabel('操作按键：'))
+        self.pinyinKeyComboBox = QComboBox()
+        for number in range(1, 25):
+            if number != 12:
+                self.pinyinKeyComboBox.addItem(f'F{number}', f'F{number}')
+        index = self.pinyinKeyComboBox.findData(self.config.get('pinyin_layer_key', 'F22'))
+        self.pinyinKeyComboBox.setCurrentIndex(index if index >= 0 else self.pinyinKeyComboBox.findData('F22'))
+        self.pinyinKeyComboBox.setToolTip('独立功能键，不能与点、划、确认键重复；F12 由系统保留。')
+        pinyin_row.addWidget(self.pinyinKeyComboBox, 1)
+        self.pinyinApplyButton = QPushButton('应用')
+        self.pinyinApplyButton.setEnabled(self.guide_key.supported)
+        self.pinyinApplyButton.clicked.connect(self.savePinyinKey)
+        pinyin_row.addWidget(self.pinyinApplyButton)
+        pinyin_layout.addLayout(pinyin_row)
+        self.pinyinKeyStatus = QLabel('默认 F22；拼音由当前系统拼音输入法选字。')
+        self.pinyinKeyStatus.setWordWrap(True)
+        pinyin_layout.addWidget(self.pinyinKeyStatus)
+        self.imeSyncCheck = QCheckBox('与微软拼音中／英文状态双向同步')
+        self.imeSyncCheck.setChecked(self.config.get('pinyin_ime_sync', False))
+        self.imeSyncCheck.setEnabled(self.guide_key.supported)
+        self.imeSyncCheck.setToolTip('同步当前输入窗口。按住进入中文、松开回英文；请先完成选字再松开。双击只显隐码表。')
+        pinyin_layout.addWidget(self.imeSyncCheck)
+        self.imeSyncStatus = QLabel('同步默认关闭；开启后点击“应用”或“保存设置”。')
+        self.imeSyncStatus.setWordWrap(True)
+        pinyin_layout.addWidget(self.imeSyncStatus)
+        inputSettingsLayout.addWidget(pinyin_group)
 
         startup_group = QGroupBox('启动与快捷键')
         startup_layout = QVBoxLayout(startup_group)
@@ -1327,42 +1475,15 @@ class Window(QDialog):
         self.autostartCheckbox = QCheckBox('启动后自动开始输入')
         self.autostartCheckbox.setChecked(self.config.get('autostart', False))
         startup_layout.addWidget(self.autostartCheckbox)
-        self.pinyinLayerCheck = QCheckBox('启用拼音层按键（双击显示／隐藏码表）')
-        self.pinyinLayerCheck.setChecked(self.config.get('pinyin_layer_enabled', True))
-        self.pinyinLayerCheck.setEnabled(self.guide_key.supported)
-        startup_layout.addWidget(self.pinyinLayerCheck)
-        pinyin_row = QHBoxLayout()
-        self.pinyinModeComboBox = QComboBox()
-        self.pinyinModeComboBox.addItem('按住使用', 'hold')
-        self.pinyinModeComboBox.addItem('单击切换', 'toggle')
-        self.pinyinModeComboBox.setCurrentIndex(1 if self.config.get('pinyin_layer_mode') == 'toggle' else 0)
-        self.pinyinModeComboBox.setToolTip('按住：松开恢复英文。切换：单击切层，等待双击窗口结束；开始输入可立即确认单击。')
-        pinyin_row.addWidget(self.pinyinModeComboBox, 1)
-        self.pinyinKeyComboBox = QComboBox()
-        for number in range(1, 25):
-            if number != 12:
-                self.pinyinKeyComboBox.addItem(f'F{number}', f'F{number}')
-        index = self.pinyinKeyComboBox.findData(self.config.get('pinyin_layer_key', 'F22'))
-        self.pinyinKeyComboBox.setCurrentIndex(index if index >= 0 else self.pinyinKeyComboBox.findData('F22'))
-        self.pinyinKeyComboBox.setToolTip('独立功能键，不能与点、划、确认键重复；F12 由系统保留。')
-        pinyin_row.addWidget(self.pinyinKeyComboBox, 1)
-        self.pinyinApplyButton = QPushButton('应用')
-        self.pinyinApplyButton.setEnabled(self.guide_key.supported)
-        self.pinyinApplyButton.clicked.connect(self.savePinyinKey)
-        pinyin_row.addWidget(self.pinyinApplyButton)
-        startup_layout.addLayout(pinyin_row)
-        self.pinyinKeyStatus = QLabel('默认 F22；拼音由当前系统拼音输入法选字。')
-        self.pinyinKeyStatus.setWordWrap(True)
-        startup_layout.addWidget(self.pinyinKeyStatus)
         self.hotkeyEnabledCheck = QCheckBox('额外的单击显隐快捷键')
         self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
         self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
         startup_layout.addWidget(self.hotkeyEnabledCheck)
-        shortcut_row = QHBoxLayout()
+        shortcut_row = ResponsiveSettingsRow()
         self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey') or DEFAULT_GLOBAL_HOTKEY))
         self.hotkeyEdit.setToolTip('按下新的组合键后点击“应用”；未开始输入时切换设置窗口。')
         self.hotkeyPresetComboBox = QComboBox()
-        self.hotkeyPresetComboBox.addItem(DEFAULT_GLOBAL_HOTKEY + '（默认）', DEFAULT_GLOBAL_HOTKEY)
+        self.hotkeyPresetComboBox.addItem('默认组合键', DEFAULT_GLOBAL_HOTKEY)
         for number in range(13, 25):
             self.hotkeyPresetComboBox.addItem(f'F{number}', f'F{number}')
         self.hotkeyPresetComboBox.addItem('自定义组合键…', None)
@@ -1607,6 +1728,7 @@ class Window(QDialog):
                     self.codeslayoutview.reset()
                     if payload.get('reason') in ('timing_overrun', 'late_input') and hasattr(self.codeslayoutview, 'showMessage'):
                         self.codeslayoutview.showMessage('输入已重置，请松开按键后继续', False)
+                self.finishImeLayerChange()
 
     def on_press(self, key, role):
         self.handle_key_event(key, True, role)
@@ -1631,20 +1753,21 @@ class Window(QDialog):
         self._sequence_pinyin = None
         if self.codeslayoutview is not None:
             self.codeslayoutview.reset()
-            if character and hasattr(self.codeslayoutview, 'showResult'):
+            if character and success is not None and hasattr(self.codeslayoutview, 'showResult'):
                 if success:
                     self.codeslayoutview.showResult(label, True)
                 else:
                     self.codeslayoutview.showMessage(label, False)
             self.updateOutputState()
-        if character:
+        if character and success is not None:
             self.audio.confirm(success)
+        self.finishImeLayerChange()
 
     def enableRepeatMode(self):
         self.repeaton = self.key_output.toggle_lock_mode()
         self.updateOutputState()
 
-    def handleMorseCode(self, character):
+    def handleMorseCode(self, character, *, ime_confirmed=False):
         morse_code = ''.join(str(symbol) for symbol in character)
         if not morse_code:
             return False, ''
@@ -1653,10 +1776,35 @@ class Window(QDialog):
             layout = self._pinyin_layout if pinyin else self.layoutManager.get_active_layout()
             items = layout.get('items', [])
             item = next((item for item in items if item.get('code') == morse_code), None)
+            if (item is not None and self.ime_sync.enabled and item.get('action') != 'SOUND'
+                    and not item.get('action', '').startswith('MOUSE')):
+                if not ime_confirmed and (self._ime_request is not None or self._ime_pending_codes):
+                    if len(self._ime_pending_codes) >= 8:
+                        return False, '输入法同步尚未完成，请稍后重试'
+                    self._ime_pending_codes.append((tuple(character), pinyin))
+                    return None, '正在同步输入法'
+                state = self.ime_sync.latest
+                if (not ime_confirmed and self._ime_deferred_layer is not None and
+                        self._ime_deferred_layer == pinyin and state is not None and
+                        state.is_pinyin is True and state.chinese is not None and
+                        state.chinese != pinyin and self.ime_sync.target_matches(state)):
+                    # The previous-mode queue can finish while this new-mode
+                    # character is still being keyed. Complete its transition
+                    # now instead of treating our own deferred mode as external.
+                    self._ime_pending_codes.append((tuple(character), pinyin))
+                    self._ime_request = self.ime_sync.request(pinyin, state)
+                    return None, '正在同步输入法'
+                if (state is None or state.process_id == os.getpid() or state.chinese != pinyin or
+                        not self.ime_sync.target_matches(state)):
+                    return False, '输入法状态已改变，本次电码未发送'
             if item is not None and 'pinyin_text' in item:
                 self.key_output.send_pinyin(item['pinyin_text'])
                 self.repeaton = False
                 return True, item['label']
+            if item is not None and 'pinyin_symbol' in item:
+                self.key_output.send_pinyin_symbol(item['pinyin_symbol'])
+                self.repeaton = False
+                return True, item['pinyin_symbol']
             if item is None or '_action' not in item:
                 return False, '无效码：' + morse_code.replace('1', '•').replace('2', '—')
             action = item['_action']

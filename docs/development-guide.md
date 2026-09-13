@@ -21,6 +21,19 @@ py -3 -m venv .venv
 
 修改映射后先执行 `tools/generate_codechart.py`，再用 `--check` 同时检查 `codechart.md` 与 `docs/pinyin-code-chart.md`。`guide_gesture.py` 负责按住／单击切层和双击显隐，`KeyboardOutput.send_pinyin` 输出逐个拉丁按键以进入目标拼音输入法。测试使用模拟键鼠和音频，不能替代实际输入法、设备延迟或游戏兼容性验证。
 
+`windows_ime.py` 读取前台输入线程的键盘布局与默认输入法窗口，识别微软拼音并执行有超时限制的定向中／英切换；写入前核对目标，写入后读取状态确认。现代输入法共用键盘布局时，只有能够唯一确定微软拼音才允许同步，不使用调用线程的输入法状态冒充前台状态。`ime_sync.py` 在工作线程中轮询和切换，避免占用界面或音频线程。
+
+输入法隔离测试覆盖未知身份、权限与超时、目标变化、状态读回及延迟请求；不接触真实输入法。Windows 桌面上可额外运行：
+
+```powershell
+# 只读当前输入窗口的输入法状态，不采集输入文字
+.\.venv\Scripts\python.exe tools/probe_windows_ime.py
+# 在脚本自己创建的空白输入窗口验证切换，并恢复原状态
+.\.venv\Scripts\python.exe tools/probe_windows_ime.py --self-test
+```
+
+自测不发送键盘输入、不改变系统输入法选择、不向其他窗口写入。只有 Windows 允许自建测试窗口获得前台时才执行切换，否则明确报告测试不可用。本机已验证微软拼音中／英连续切换和原状态恢复；这些结果不代替不同应用、权限或游戏环境的测试。
+
 在 Windows 桌面上额外检查精简码表的真实显示与缩放：
 
 ```powershell

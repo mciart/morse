@@ -27,15 +27,15 @@ class PinyinCodeChartTests(unittest.TestCase):
     def render(self):
         return charts.render_pinyin_chart(self.layouts, self.key_data, self.display_names)
 
-    def test_committed_chart_matches_all_116_actual_runtime_entries(self):
+    def test_committed_chart_matches_all_142_actual_runtime_entries(self):
         text = self.render()
         self.assertEqual(text, (PROJECT / 'docs/pinyin-code-chart.md').read_text(encoding='utf-8'))
         items = build_pinyin_layout(normalize_layouts(self.layouts['layouts'])['desktop'])['items']
         rows = [line.split(' | ') for line in text.splitlines()
                 if line.startswith('| ') and '`' in line]
         actual_codes = [row[2].strip('`').translate(str.maketrans({'•': '1', '—': '2'})) for row in rows]
-        self.assertEqual(len(rows), 116)
-        self.assertEqual(len(set(actual_codes)), 116)
+        self.assertEqual(len(rows), 142)
+        self.assertEqual(len(set(actual_codes)), 142)
         self.assertEqual(actual_codes, [item['code'] for item in items])
         for row, item in zip(rows, items):
             if 'pinyin_text' in item:
@@ -45,7 +45,7 @@ class PinyinCodeChartTests(unittest.TestCase):
                 self.assertIn('注音原码：' + item['zhuyin'], row[3])
             elif 'pinyin_text' in item:
                 self.assertIn('软件扩展', row[3])
-        for count in (23, 35, 27, 31):
+        for count in (23, 35, 26, 27, 31):
             self.assertIn(f'共 {count} 项。', text)
 
     def test_pinyin_spelling_and_relocated_controls_are_explicit(self):
@@ -61,7 +61,15 @@ class PinyinCodeChartTests(unittest.TestCase):
         self.assertIn('默认采用“按住”方式', text)
         self.assertIn('单击切换中英文层，松开后保留当前层', text)
         self.assertIn('双击只显示或隐藏码表，不改变已选择的层', text)
-        self.assertIn('不会自动切换系统输入法', text)
+        self.assertIn('可在设置中开启微软拼音状态同步', text)
+
+    def test_symbols_explain_ime_punctuation_and_show_actual_codes(self):
+        text = self.render()
+        self.assertIn('全部 26 个可打印符号', text)
+        self.assertIn('由当前输入法的标点模式决定', text)
+        self.assertIn('| . | 键盘符号：. | `•—•—•—` | 沿用英文层符号码 |', text)
+        self.assertIn('| ? | 键盘符号：? | `••••••—` | 软件扩展（拼音层重分配） |', text)
+        self.assertIn('| \\` | 键盘符号：\\` | `•••••••` | 沿用英文层符号码 |', text)
 
     def test_invalid_pinyin_builder_results_fail_generation(self):
         layout = build_pinyin_layout(normalize_layouts(self.layouts['layouts'])['desktop'])
@@ -71,6 +79,14 @@ class PinyinCodeChartTests(unittest.TestCase):
             with patch.object(charts, 'build_pinyin_layout', return_value=malformed):
                 with self.assertRaisesRegex(ValueError, message):
                     self.render()
+
+    def test_symbol_documentation_rejects_output_metadata_that_disagrees_with_action(self):
+        layout = build_pinyin_layout(normalize_layouts(self.layouts['layouts'])['desktop'])
+        symbol = next(item for item in layout['items'] if item['action'] == 'QUESTION')
+        symbol['pinyin_symbol'] = '!'
+        with patch.object(charts, 'build_pinyin_layout', return_value=layout):
+            with self.assertRaisesRegex(ValueError, '拼音符号输出与英文动作不一致'):
+                self.render()
 
     def test_keycap_ast_reader_does_not_execute_ui_source(self):
         with TemporaryDirectory() as directory:

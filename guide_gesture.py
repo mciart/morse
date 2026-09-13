@@ -32,30 +32,36 @@ def normalize_guide_key(key):
 class HoldTapGesture:
     """Interpret one key as a temporary or latched layer plus guide double-tap.
 
-    ``held`` always describes the physical key. Hold mode emits ``held`` layer
-    events. Toggle mode emits ``layer`` events and exposes ``layer_active``;
-    its short single tap waits for the double-tap deadline before changing it.
+    ``held`` always describes the physical key; ``layer_active`` describes the
+    input layer in either mode. Hold mode emits ``held`` layer events only
+    after its recognition threshold or the first Morse input, so short taps
+    never flash the layer. Toggle mode emits ``layer`` events; its short
+    single tap waits for the double-tap deadline before changing the layer.
     ``toggle`` always means guide visibility, never the input layer.
     """
 
-    def __init__(self, *, mode='hold', tap_seconds=0.250, gap_seconds=0.300):
+    def __init__(self, *, mode='hold', tap_seconds=0.250, gap_seconds=0.300,
+                 hold_seconds=0.180):
         if mode not in ('hold', 'toggle'):
             raise ValueError('拼音层方式只能是按住或切换。')
         self.mode = mode
         self.tap_seconds = tap_seconds
         self.gap_seconds = gap_seconds
+        self.hold_seconds = hold_seconds
         self.held = False
         self.layer_active = False
         self._pressed_at = None
         self._last_tap_at = None
         self._pending_single = None
         self._used = False
+        self._hold_active = False
 
     def key(self, pressed, at):
         if self.mode == 'toggle':
             return self._toggle_key(pressed, at)
+        events = self.tick(at)
         if bool(pressed) == self.held:
-            return []
+            return events
         self.held = bool(pressed)
         if self.held:
             if (self._last_tap_at is not None and
@@ -63,9 +69,12 @@ class HoldTapGesture:
                 self._last_tap_at = None
             self._pressed_at = at
             self._used = False
-            return [('held', True)]
+            self._hold_active = False
+            return events
 
-        events = [('held', False)]
+        if self._hold_active and self.layer_active:
+            self.layer_active = False
+            events.append(('held', False))
         short = not self._used and 0 <= at - self._pressed_at <= self.tap_seconds
         if short and self._last_tap_at is not None:
             events.append(('toggle', None))
@@ -74,7 +83,17 @@ class HoldTapGesture:
             self._last_tap_at = at if short else None
         self._pressed_at = None
         self._used = False
+        self._hold_active = False
         return events
+
+    def _activate_hold(self):
+        self._hold_active = True
+        self._used = True
+        self._last_tap_at = None
+        if self.layer_active:
+            return []
+        self.layer_active = True
+        return [('held', True)]
 
     def _switch_layer(self):
         self.layer_active = not self.layer_active
@@ -109,12 +128,15 @@ class HoldTapGesture:
         return events
 
     def tick(self, at):
-        """Resolve a toggle-mode single tap at its deadline, without sleeping.
+        """Resolve a held key or a toggle-mode single tap without sleeping.
 
         The double-tap release must be strictly before that deadline. At the
         deadline the single is already final, including when Qt delivers the
         timer and the second release in the same GUI turn.
         """
+        if (self.mode == 'hold' and self.held and not self._hold_active and
+                at >= self._pressed_at + self.hold_seconds):
+            return self._activate_hold()
         if (self.mode == 'toggle' and self._pending_single is not None and
                 at >= self._pending_single):
             self._pending_single = None
@@ -122,8 +144,10 @@ class HoldTapGesture:
         return []
 
     def note_input(self):
-        """Morse input between or during taps cannot also toggle the guide."""
+        """Resolve the input layer before Morse input and cancel guide taps."""
         events = []
+        if self.mode == 'hold' and self.held and not self._hold_active:
+            events = self._activate_hold()
         if self.mode == 'toggle' and self._pending_single is not None:
             self._pending_single = None
             events = self._switch_layer()
@@ -132,9 +156,27 @@ class HoldTapGesture:
             self._used = True
         return events
 
+    def sync_layer(self, enabled):
+        """Silently adopt an externally observed input layer, with no echo.
+
+        Unchanged observations preserve pending taps. A real change discards
+        pending click gestures, while preserving the physical key and its
+        hold deadline. A confirmed hold still returns to English on release;
+        an unconfirmed short press never forces an external layer back off.
+        """
+        enabled = bool(enabled)
+        if enabled == self.layer_active:
+            return []
+        self.layer_active = enabled
+        self._last_tap_at = None
+        self._pending_single = None
+        if self.held:
+            self._used = True
+        return []
+
     def reset(self):
         if self.mode == 'hold':
-            events = [('held', False)] if self.held else []
+            events = [('held', False)] if self.layer_active else []
         else:
             events = [('layer', False)] if self.layer_active else []
         self.held = False
@@ -143,6 +185,7 @@ class HoldTapGesture:
         self._last_tap_at = None
         self._pending_single = None
         self._used = False
+        self._hold_active = False
         return events
 
 

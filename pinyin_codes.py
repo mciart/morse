@@ -62,6 +62,29 @@ CONTROL_ACTIONS = (
     'LEFTARROW', 'RIGHTARROW', 'UPARROW', 'DOWNARROW',
     'PAGEUP', 'PAGEDOWN', 'HOME', 'END', 'INSERT', 'DELETE', 'SOUND',
 )
+# The same 26 printable symbols as the English keyboard, in reading order.
+# Seven collide with existing Pinyin/control codes. Keep those established
+# codes and give only the symbols fixed seven-element software extensions.
+SYMBOL_ACTIONS = (
+    'DOT', 'COMMA', 'QUESTION', 'EXCLAMATION', 'COLON', 'SEMICOLON',
+    'SINGLEQUOTE', 'DOUBLEQUOTE', 'OPENBRACKET', 'CLOSEBRACKET',
+    'FSLASH', 'BSLASH', 'BACKTICK',
+    'AT', 'HASH', 'DOLLAR', 'PERCENT', 'AMPERSAND', 'STAR', 'PLUS',
+    'MINUS', 'EQUALS', 'UNDERSCORE', 'LESSTHAN', 'MORETHAN', 'CIRCONFLEX',
+)
+SYMBOL_CHARACTERS = {
+    'DOT': '.', 'COMMA': ',', 'QUESTION': '?', 'EXCLAMATION': '!',
+    'COLON': ':', 'SEMICOLON': ';', 'SINGLEQUOTE': "'", 'DOUBLEQUOTE': '"',
+    'OPENBRACKET': '(', 'CLOSEBRACKET': ')', 'FSLASH': '/', 'BSLASH': '\\',
+    'BACKTICK': '`', 'AT': '@', 'HASH': '#', 'DOLLAR': '$', 'PERCENT': '%',
+    'AMPERSAND': '&', 'STAR': '*', 'PLUS': '+', 'MINUS': '-', 'EQUALS': '=',
+    'UNDERSCORE': '_', 'LESSTHAN': '<', 'MORETHAN': '>', 'CIRCONFLEX': '^',
+}
+SYMBOL_EXTENSION_CODES = {
+    'QUESTION': '1111112', 'HASH': '1111121', 'AMPERSAND': '1111122',
+    'PLUS': '1111211', 'EQUALS': '1111212', 'FSLASH': '1111221',
+    'OPENBRACKET': '1111222',
+}
 
 
 def _binary(pattern):
@@ -101,10 +124,9 @@ def _valid_code(item):
     return code
 
 
-def _unused_extension(reserved):
-    # Only custom control remaps need this fallback. Fixed shipped mappings
+def _unused_extension(reserved, length=5):
+    # Only custom remaps need this fallback. Fixed shipped mappings
     # never depend on table ordering or this allocator.
-    length = 5
     while True:
         for symbols in product('12', repeat=length):
             code = ''.join(symbols)
@@ -117,8 +139,8 @@ def build_pinyin_layout(english_layout):
     """Return a new, collision-free Pinyin guide and reuse bound OS actions.
 
     Only Pinyin fragments have ``pinyin_text`` and ``PINYIN_*`` action names.
-    The original control/mouse names and their ``_action`` objects survive,
-    so the same selection, editing, sound and optional mouse actions work.
+    The original control/symbol/mouse names and their ``_action`` objects
+    survive, so selection, editing, punctuation and optional mouse actions work.
     The caller binds the new fragment actions to ASCII keyboard output.
     No source item or source runtime action is modified.
     """
@@ -134,11 +156,13 @@ def build_pinyin_layout(english_layout):
 
     source_items = english_layout.get('items', [])
     controls = {}
+    symbols = {}
     mice = []
     included_actions = set()
     for source in source_items:
         action = source.get('action', '')
-        if action not in CONTROL_ACTIONS and not action.startswith('MOUSE'):
+        if (action not in CONTROL_ACTIONS and action not in SYMBOL_ACTIONS
+                and not action.startswith('MOUSE')):
             continue
         if action in included_actions:
             raise ValueError('拼音层继承了重复动作：%s' % action)
@@ -146,8 +170,10 @@ def build_pinyin_layout(english_layout):
         _valid_code(source)
         if action.startswith('MOUSE'):
             mice.append(_copy_action_item(source))
-        else:
+        elif action in CONTROL_ACTIONS:
             controls[action] = _copy_action_item(source)
+        else:
+            symbols[action] = _copy_action_item(source)
 
     occupied = {item['code'] for item in items}
     for item in mice:
@@ -179,5 +205,35 @@ def build_pinyin_layout(english_layout):
         occupied.add(item['code'])
         reserved.add(item['code'])
         items.append(item)
+    # Symbols have lower priority than all established Pinyin, control and
+    # mouse codes. Reserve free original codes before allocating conflicts so
+    # custom layouts and reordered source tables yield the same mappings.
+    reserved = occupied | {item['code'] for item in symbols.values()}
+    reserved.update(SYMBOL_EXTENSION_CODES.values())
+    symbol_items = []
+    for action in SYMBOL_ACTIONS:
+        if action not in symbols:
+            continue
+        item = symbols[action]
+        if item['code'] in occupied:
+            replacement = SYMBOL_EXTENSION_CODES.get(action)
+            if replacement is None or replacement in occupied or any(
+                    other['action'] != action and other['code'] == replacement
+                    for other in symbols.values()):
+                replacement = _unused_extension(reserved, length=7)
+            item['code'] = replacement
+            item['extension'] = True
+        hint = ('拼音层专用软件扩展码；英文层编码保持不变；'
+                if item.get('extension') else '')
+        item['tooltip'] = hint + '输入键盘符号；中文标点由当前输入法的标点模式决定'
+        item['pinyin_group'] = 'symbol'
+        item['pinyin_symbol'] = SYMBOL_CHARACTERS[action]
+        occupied.add(item['code'])
+        reserved.add(item['code'])
+        symbol_items.append(item)
+    # Keep reading order identical to the board and generated documentation.
+    control_index = next((index for index, item in enumerate(items)
+                          if item['pinyin_group'] == 'control'), len(items))
+    items[control_index:control_index] = symbol_items
     items.extend(mice)
     return {'display_name': '拼音 · 声母与韵母', 'items': items}

@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from PyQt5.QtWidgets import QAbstractButton, QStyle, QStyleOptionComboBox
+
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 # Importing the application must not truncate the user's log.
@@ -179,6 +181,84 @@ class WindowBehaviorTests(unittest.TestCase):
         with open(self.window.configManager.config_file, encoding='utf-8') as stream:
             self.assertEqual(json.load(stream), self.window.collect_config())
         self.start_input()
+
+    def settle_settings_layout(self):
+        for _ in range(6):
+            self.app.processEvents()
+
+    def assert_settings_fields_fit(self):
+        content = self.window.iconGroupBox
+        scroll = self.window.settings_scroll
+        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+        self.assertLessEqual(content.width(), scroll.viewport().width())
+        for widget in content.findChildren(morse.QWidget):
+            if not widget.isVisibleTo(content):
+                continue
+            origin = widget.mapTo(content, morse.QtCore.QPoint())
+            self.assertGreaterEqual(origin.x(), 0, repr(widget))
+            self.assertLessEqual(origin.x() + widget.width(), content.width(), repr(widget))
+            if isinstance(widget, morse.QLabel):
+                self.assertGreaterEqual(widget.height(), widget.heightForWidth(widget.width()), widget.text())
+            if isinstance(widget, QAbstractButton):
+                self.assertGreaterEqual(widget.width(), widget.minimumSizeHint().width(), widget.text())
+                self.assertGreaterEqual(widget.height(), widget.minimumSizeHint().height(), widget.text())
+            if isinstance(widget, morse.QComboBox):
+                option = QStyleOptionComboBox()
+                widget.initStyleOption(option)
+                field = widget.style().subControlRect(
+                    QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, widget)
+                self.assertGreaterEqual(field.width(), widget.fontMetrics().horizontalAdvance(widget.currentText()),
+                                        widget.currentText())
+        for button in (self.window.DeviceButton, self.window.SaveButton, self.window.GOButton):
+            origin = button.mapTo(self.window, morse.QtCore.QPoint())
+            self.assertTrue(self.window.rect().contains(morse.QtCore.QRect(origin, button.size())))
+            self.assertGreaterEqual(button.width(), button.minimumSizeHint().width(), button.text())
+
+    def test_responsive_settings_do_not_clip_fields_on_small_and_large_windows(self):
+        self.window.keySelectionRadioThreeKey.click()
+        for combo in (self.window.iconComboBoxKeyOne, self.window.iconComboBoxKeyTwo,
+                      self.window.iconComboBoxKeyThree):
+            combo.setCurrentIndex(combo.findData('MOUSE_X1'))
+        for width, height in ((360, 300), (640, 480), (1280, 720)):
+            with self.subTest(size=(width, height)):
+                self.window.resize(width, height)
+                self.settle_settings_layout()
+                self.assertEqual(self.window.size(), morse.QtCore.QSize(width, height))
+                self.assert_settings_fields_fit()
+
+    def test_large_settings_font_wraps_captions_and_mode_row_without_clipping(self):
+        self.window.setStyleSheet('* { font-size: 18pt; }')
+        self.window.resize(360, 300)
+        self.settle_settings_layout()
+        self.assertEqual(self.window.size(), morse.QtCore.QSize(360, 300))
+        self.assert_settings_fields_fit()
+        self.assertGreater(self.window.pinyinToggleRadio.y(), self.window.pinyinHoldRadio.y())
+        self.window.resize(900, 720)
+        self.settle_settings_layout()
+        self.assertEqual(self.window.pinyinToggleRadio.y(), self.window.pinyinHoldRadio.y())
+        self.assert_settings_fields_fit()
+
+    def test_settings_first_size_and_screen_change_use_available_space(self):
+        sizer = self.window.settings_sizer
+        available = morse.QtCore.QRect(0, 0, 1280, 720)
+        sizer._screen_provider = lambda: available
+        sizer.fit_to_screen(initial=True)
+        self.settle_settings_layout()
+        self.assertGreaterEqual(self.window.width(), 560)
+        self.assertGreater(self.window.height(), 600)
+        self.assertTrue(available.contains(self.window.frameGeometry()))
+        self.assert_settings_fields_fit()
+        self.window.resize(600, 400)
+        self.settle_settings_layout()
+        wanted = self.window.geometry()
+        sizer._screen_metrics_changed()
+        self.settle_settings_layout()
+        self.assertEqual(self.window.geometry(), wanted)
+        available = morse.QtCore.QRect(-640, 0, 640, 480)
+        sizer._screen_metrics_changed()
+        self.settle_settings_layout()
+        self.assertTrue(available.contains(self.window.frameGeometry()))
+        self.assert_settings_fields_fit()
 
     def test_guide_options_default_to_fit_without_mouse_and_persist_changes(self):
         self.assertTrue(self.window.guideAutoFitCheckBox.isChecked())

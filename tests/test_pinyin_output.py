@@ -84,6 +84,67 @@ class PinyinOutputTests(unittest.TestCase):
         self.output.reset()
         self.assertEqual(self.output.held_modifiers, ())
 
+    def test_all_26_symbols_emit_us_key_events_instead_of_unicode(self):
+        expected = {
+            '.': '.', ',': ',', '?': 'shift+/', '!': 'shift+1', ':': 'shift+;',
+            ';': ';', "'": "'", '"': "shift+'", '(': 'shift+9', ')': 'shift+0',
+            '/': '/', '\\': '\\', '`': '`', '@': 'shift+2', '#': 'shift+3',
+            '$': 'shift+4', '%': 'shift+5', '&': 'shift+7', '*': 'shift+8',
+            '+': 'shift+=', '-': '-', '=': '=', '_': 'shift+-',
+            '<': ['shift', ','], '>': 'shift+.', '^': 'shift+6',
+        }
+        self.assertEqual(len(expected), 26)
+        for character, chord in expected.items():
+            with self.subTest(character=character):
+                self.backend.reset_mock()
+                self.assertEqual(self.output.send_pinyin_symbol(character), character)
+                self.assertEqual(self.backend.mock_calls, [call.send(chord)])
+                self.backend.write.assert_not_called()
+
+    def test_symbol_releases_owned_modifiers_before_punctuation_key(self):
+        self.output.toggle_lock_mode()
+        for modifier in ('ctrl', 'alt', 'right shift', 'windows'):
+            self.output.send(modifier, modifier=True)
+        self.backend.reset_mock()
+        self.output.send_pinyin_symbol('?')
+        self.assertEqual(self.backend.mock_calls, [
+            call.release('windows'), call.release('right shift'),
+            call.release('alt'), call.release('ctrl'), call.send('shift+/')])
+        self.assertFalse(self.output.lock_mode)
+        self.assertEqual(self.output.held_modifiers, ())
+
+    def test_invalid_symbol_does_not_change_owned_modifiers_or_send(self):
+        self.output.toggle_lock_mode()
+        self.output.send('ctrl', modifier=True)
+        self.backend.reset_mock()
+        for character in ('', '??', 'a', '1', '，', '。', ' ', '\n', '[', None, ['?']):
+            with self.subTest(character=character), self.assertRaises(ValueError):
+                self.output.send_pinyin_symbol(character)
+        self.assertEqual(self.backend.mock_calls, [])
+        self.assertTrue(self.output.lock_mode)
+        self.assertEqual(self.output.held_modifiers, ('ctrl',))
+
+    def test_partial_symbol_chord_failure_releases_temporary_shift_and_key(self):
+        self.backend.send.side_effect = RuntimeError('partial send failed')
+        with self.assertRaisesRegex(RuntimeError, 'partial send failed'):
+            self.output.send_pinyin_symbol('<')
+        self.assertEqual(self.backend.mock_calls, [
+            call.send(['shift', ',']), call.release(['shift', ','])])
+        self.backend.write.assert_not_called()
+
+    def test_symbol_waits_for_owned_modifier_release_to_succeed(self):
+        self.output.send('ctrl', modifier=True)
+        self.backend.reset_mock()
+        self.backend.release.side_effect = RuntimeError('release failed')
+        with self.assertRaisesRegex(RuntimeError, 'release failed'):
+            self.output.send_pinyin_symbol('?')
+        self.assertEqual(self.backend.mock_calls, [call.release('ctrl')])
+        self.assertEqual(self.output.held_modifiers, ('ctrl',))
+
+    def test_english_punctuation_still_uses_exact_output(self):
+        self.assertEqual(self.output.send('shift+/', character='?'), '?')
+        self.assertEqual(self.backend.mock_calls, [call.write('?', exact=True)])
+
 
 if __name__ == '__main__':
     unittest.main()

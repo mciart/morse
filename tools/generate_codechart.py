@@ -139,16 +139,17 @@ def render_pinyin_chart(layout_data, key_data, display_names):
         '',
         '本表直接由软件使用的 [build_pinyin_layout](../pinyin_codes.py) 生成。'
         '37 个注音符号使用[国音电码的注音编码](https://zh.wikipedia.org/zh-cn/摩尔斯电码#中文注音)，'
-        '键帽显示对应的拼音拼写；新增拼写及编辑操作明确标为软件扩展。',
+        '键帽显示对应的拼音拼写；新增拼写和发生编码冲突的编辑键、符号明确标为软件扩展。',
         '',
         '启用拼音层时使用本表，未启用时使用[英文键盘码表](../codechart.md)。'
         '默认采用“按住”方式：按住码表快捷键进入拼音层，松开恢复英文。'
         '也可在设置中选择“单击切换”：单击切换中英文层，松开后保留当前层；'
         '双击只显示或隐藏码表，不改变已选择的层。'
         '当前电码以第一个点划确定所属层，切换层不会改变尚未确认电码的解释。'
-        '软件输入拼音字母，由当前系统拼音输入法选字；不会自动切换系统输入法或改写之前输入的文字。',
+        '软件输入拼音字母，由当前系统拼音输入法选字；不会改写之前输入的文字。'
+        '可在设置中开启微软拼音状态同步，让码表与当前输入窗口的中英文状态同步切换。',
         '',
-        '`•` 表示点，`—` 表示划。左侧是声母，右侧是韵母；底部保留数字、选字与编辑操作。'
+        '`•` 表示点，`—` 表示划。左侧是声母，右侧是韵母；下方依次是符号、数字、选字与编辑操作。'
         '鼠标区沿用英文层的 31 个动作及编码，可单独开启，默认隐藏。',
         '',
         '拼音按输入法键盘约定输出：`ü` 输入 `v`，`üe` 输入 `ve`，`ê` 输入 `e`。'
@@ -164,11 +165,17 @@ def render_pinyin_chart(layout_data, key_data, display_names):
         '在拼音层使用独立扩展码。更改只在拼音层生效，英文层仍保留原码；'
         '数字及未冲突的编辑键继续沿用英文码。',
         '',
+        '拼音层包含英文层的全部 26 个可打印符号。19 个沿用英文层编码；'
+        '`? # & + = / (` 与现有拼音或编辑码冲突，使用独立的七位软件扩展码。'
+        '这些符号发送与英文层相同的键盘符号，是否转换为中文标点由当前输入法的标点模式决定；'
+        '软件不会把半角字符硬编码为全角字符。',
+        '',
         f'共 {len(items)} 项，各项编码唯一。',
         '',
     ]
     for group, title in (('initial', '声母与拼写字母（左侧）'),
                          ('final', '韵母（右侧）'),
+                         ('symbol', '符号'),
                          ('control', '数字、选字与编辑'), ('mouse', '鼠标（可选）')):
         grouped = [item for item in items if item['pinyin_group'] == group]
         lines.extend([
@@ -188,7 +195,13 @@ def render_pinyin_chart(layout_data, key_data, display_names):
                 definition = key_data[action]
                 label = display_names.get(action, item.get('label', definition['label']))
                 character = definition.get('character')
-                if character is not None and character.isdigit():
+                if group == 'symbol':
+                    if item['pinyin_symbol'] != character:
+                        raise ValueError('拼音符号输出与英文动作不一致：%s' % action)
+                    output = '键盘符号：' + item['pinyin_symbol']
+                    origin = ('软件扩展（拼音层重分配）' if item.get('extension') else
+                              '沿用英文层符号码')
+                elif character is not None and character.isdigit():
                     output = character
                     origin = '国际数字码（沿用英文层）'
                 else:

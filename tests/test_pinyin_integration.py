@@ -36,6 +36,8 @@ class PinyinIntegrationTests(unittest.TestCase):
     def test_same_code_outputs_english_then_pinyin_then_english(self):
         self.code('222')
         self.window.processGuideKey(True, self.now)
+        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + .18))
+        self.now += .18
         self.assertTrue(self.view.isPinyinMode())
         self.code('222')
         self.window.processGuideKey(False, self.now)
@@ -135,6 +137,7 @@ class PinyinIntegrationTests(unittest.TestCase):
         self.window.startKeyListener()
         self.window.engine_timer.stop()
         self.window.processGuideKey(True, self.now + .3)
+        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + .5))
         self.assertTrue(self.view.isPinyinMode())
 
     def test_conflicting_control_code_is_specific_to_pinyin_layer(self):
@@ -169,6 +172,7 @@ class PinyinIntegrationTests(unittest.TestCase):
             self.window.applyGuideHotkey()
         self.assertFalse(self.window._layer_blocked)
         self.window.processGuideKey(True, self.now + .1)
+        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + .3))
         self.assertTrue(self.view.isPinyinMode())
 
 

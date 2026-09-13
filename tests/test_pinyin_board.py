@@ -63,7 +63,7 @@ class PinyinBoardTests(TestCase):
         self.drain()
         self.assertTrue(view.isPinyinMode())
         self.assertEqual(set(view.crs), {item['code'] for item in self.pinyin['items']})
-        initials, finals, controls = [], [], []
+        initials, finals, symbols, controls = [], [], [], []
         for cap in view.crs.values():
             group = cap.item.get('pinyin_group')
             if group in ('initial', 'final'):
@@ -76,11 +76,17 @@ class PinyinBoardTests(TestCase):
                 initials.append((top_left, cap.size()))
             elif group == 'final':
                 finals.append((top_left, cap.size()))
+            elif group == 'symbol':
+                symbols.append((top_left, cap.size()))
             elif group == 'control':
                 controls.append((top_left, cap.size()))
         self.assertLess(max(point.x() + size.width() for point, size in initials),
                         min(point.x() for point, size in finals))
         self.assertLess(max(point.y() + size.height() for point, size in initials + finals),
+                        min(point.y() for point, size in symbols))
+        self.assertEqual(len(symbols), 26)
+        self.assertEqual(len({point.y() for point, _ in symbols}), 2)
+        self.assertLess(max(point.y() + size.height() for point, size in symbols),
                         min(point.y() for point, size in controls))
         self.assert_caps_fit()
         view.setPinyinMode(False)

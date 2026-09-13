@@ -127,7 +127,7 @@ class DesktopIntegrationTests(TestCase):
         self.assertNotEqual(self.window.config.get('guide_hotkey'), 'Ctrl+F22')
 
     def test_pinyin_mode_and_key_are_configurable_and_persisted(self):
-        self.window.pinyinModeComboBox.setCurrentIndex(self.window.pinyinModeComboBox.findData('toggle'))
+        self.window.pinyinToggleRadio.setChecked(True)
         self.window.pinyinKeyComboBox.setCurrentIndex(self.window.pinyinKeyComboBox.findData('F21'))
         with patch.object(self.window.guide_hotkey, 'set_sequence'):
             self.window.startDesktopIntegration()
@@ -148,6 +148,15 @@ class DesktopIntegrationTests(TestCase):
             register.assert_called_with('F22')
         self.layer_hook.assert_called_with('')
         self.assertEqual(self.window.config.get('guide_hotkey'), 'F22')
+
+    def test_pinyin_switch_mode_and_ime_sync_option_survive_settings_reload(self):
+        self.window.pinyinToggleRadio.setChecked(True)
+        self.window.imeSyncCheck.setChecked(True)
+        self.window.SaveButton.click()
+        restored = morse.ConfigManager(self.window.configManager.config_file)
+        self.assertEqual(restored.config['pinyin_layer_mode'], 'toggle')
+        self.assertTrue(restored.config['pinyin_ime_sync'])
+        self.assertFalse(self.window.ime_sync.enabled)  # Settings alone do not write to the IME.
 
     def test_invalid_saved_pinyin_binding_remains_visible_as_an_error(self):
         self.window.config.update(pinyin_layer_key='F23', keyone='F23')
