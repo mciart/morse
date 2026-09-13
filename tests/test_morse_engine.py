@@ -195,6 +195,73 @@ class MorseEngineTests(unittest.TestCase):
         engine.key(0, False, .04)
         self.assertAlmostEqual(values(engine.tick(.16), 'feedback', 'progress')[0], .5)
 
+    def test_idle_ticks_emit_only_initial_feedback(self):
+        engine = self.engine()
+        first = engine.tick(0)
+        self.assertEqual([kind for kind, _ in first], ['feedback'])
+        self.assertEqual(values(first, 'feedback', 'at'), [0])
+        for index in range(1, 501):
+            self.assertEqual(engine.tick(index * .002), [])
+
+    def test_each_explicit_reset_forces_feedback_even_when_already_idle(self):
+        engine = self.engine()
+        engine.tick(0)
+        for timestamp in (1, 2):
+            events = engine.reset(timestamp)
+            self.assertEqual([kind for kind, _ in events], ['reset', 'feedback'])
+            self.assertEqual(values(events, 'feedback', 'at'), [timestamp])
+            self.assertEqual(engine.tick(timestamp + .1), [])
+
+    def test_feedback_changes_with_progress_without_changing_commit_deadline(self):
+        engine = self.engine(keylen=1)
+        engine.key(0, True, 0)
+        self.assertEqual(engine.tick(.02), [])  # Still held and sounding.
+        engine.key(0, False, .04)
+        self.assertEqual(engine.tick(.04), [])  # Same progress as release.
+        events = engine.tick(.16)
+        self.assertAlmostEqual(values(events, 'feedback', 'progress')[0], .5)
+        self.assertEqual(engine.tick(.16), [])
+        self.assertFalse(values(engine.tick(.279), 'commit', 'symbols'))
+        committed = engine.tick(.28)
+        self.assertEqual(values(committed, 'commit', 'symbols'), [(1,)])
+        self.assertAlmostEqual(values(committed, 'commit', 'at')[0], .28)
+        self.assertEqual(values(committed, 'feedback', 'symbols'), [()])
+        self.assertEqual(engine.tick(.3), [])
+
+    def test_iambic_tone_boundaries_still_emit_feedback_at_exact_times(self):
+        engine = self.engine(keyer_mode='iambic')
+        events = engine.key(0, True, 0)
+        self.assertEqual(engine.tick(.04), [])
+        ended = engine.tick(.08)
+        self.assertEqual(values(ended, 'feedback', 'tone'), [False])
+        self.assertEqual(engine.tick(.1), [])
+        started = engine.tick(.16)
+        self.assertEqual(values(started, 'feedback', 'tone'), [True])
+        self.assertEqual(values(started, 'feedback', 'symbols'), [(1, 1)])
+        events += ended + started
+        tone = [(data['on'], data['at']) for kind, data in events if kind == 'tone']
+        self.assertEqual(tone, [(True, 0), (False, .08), (True, .16)])
+
+    def test_callback_receives_same_events_in_order_without_idle_duplicates(self):
+        received = []
+        engine = MorseEngine(dict(keylen=1), callback=lambda kind, data: received.append((kind, data)))
+        operations = (lambda: engine.tick(0), lambda: engine.tick(.01),
+                      lambda: engine.key(0, True, .02), lambda: engine.tick(.03),
+                      lambda: engine.key(0, False, .04), lambda: engine.tick(.28),
+                      lambda: engine.reset(.3))
+        for operation in operations:
+            received.clear()
+            events = operation()
+            self.assertEqual(received, events)
+        self.assertEqual([kind for kind, _ in received], ['reset', 'feedback'])
+
+    def test_consumers_cannot_mutate_cached_feedback(self):
+        engine = self.engine()
+        initial = engine.tick(0)
+        initial[0][1]['held'] = (1,)
+        initial[0][1]['progress'] = .5
+        self.assertEqual(engine.tick(.1), [])
+
     def test_suspend_does_not_generate_unbounded_repeat_backlog(self):
         engine = self.engine(keyer_mode='iambic')
         engine.key(0, True, 0)

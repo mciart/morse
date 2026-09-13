@@ -932,7 +932,7 @@ class VirtualKeyboardView(QWidget):
         options.addWidget(self.mouse_checkbox)
         self.auto_fit_checkbox = QCheckBox('适应窗口')
         self.auto_fit_checkbox.setChecked(self._auto_fit)
-        self.auto_fit_checkbox.setToolTip('缩放完整对照表；关闭后按设置字号显示，并可滚动查看。')
+        self.auto_fit_checkbox.setToolTip('关闭后，英文完整码表可按设置字号滚动查看。拼音与精简码表始终适应窗口；精简模式可拖动边缘调整大小。')
         self.auto_fit_checkbox.toggled.connect(self.setAutoFit)
         options.addWidget(self.auto_fit_checkbox)
         self.compact_checkbox = QCheckBox('精简显示')

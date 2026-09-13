@@ -615,7 +615,7 @@ class UnifiedGuideTests(TestCase):
 
     def test_keyboard_and_mouse_execute_without_switching_layout(self):
         listener = self.window.listenerThread
-        with patch.object(morse.mouse, 'move') as move, patch.object(morse.mouse, 'double_click') as double_click:
+        with patch.object(self.mouse_backend, 'move') as move, patch.object(self.mouse_backend, 'double_click') as double_click:
             self.enter_code('12')
             self.enter_code('2111111')
             self.enter_code('2122112')

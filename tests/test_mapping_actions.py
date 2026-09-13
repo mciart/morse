@@ -13,6 +13,7 @@ with patch("logging.basicConfig"):
     import MorseCodeGUI as morse
 
 from keyboard_output import KeyboardOutput
+from mouse_output import MouseOutput
 
 
 # Fixed expectations, independent of the runtime table and action metadata.
@@ -85,6 +86,8 @@ class MappingActionTests(unittest.TestCase):
         self.window = morse.Window(layoutManager=self.layout, configManager=manager)
         self.backend = Mock(spec=["press", "release", "send", "write"])
         self.window.key_output = KeyboardOutput(backend=self.backend)
+        self.mouse_backend = Mock(spec=["press", "release", "click", "double_click", "move"])
+        self.window.mouse_output = MouseOutput(backend=self.mouse_backend)
         self.layout.set_actions(manager.initActions(self.window))
         self.window.postInit()
         self.views = []
@@ -259,12 +262,72 @@ class MappingActionTests(unittest.TestCase):
         self.assertEqual(self.backend.mock_calls, [])
 
     def test_mouse_double_click_codes_reach_the_correct_mouse_button(self):
-        with patch.object(morse.mouse, "double_click") as double_click:
-            self.enter_code("2122112")
-            self.enter_code("2122212")
-        self.assertEqual(double_click.call_args_list,
+        self.enter_code("2122112")
+        self.enter_code("2122212")
+        self.assertEqual(self.mouse_backend.double_click.call_args_list,
                          [call(button=morse.mouse.LEFT), call(button=morse.mouse.RIGHT)])
+        self.assertEqual(self.window.mouse_output.held_buttons, ())
         self.assertEqual(self.backend.mock_calls, [])
+
+    def test_pause_settings_and_exit_release_mouse_buttons_held_by_morse(self):
+        for index, action in enumerate(("pause", "settings", "exit")):
+            with self.subTest(action=action):
+                if index:
+                    self.window.stopIt()
+                    self.start_input()
+                self.enter_code("2122121")  # Hold left.
+                self.enter_code("2122221")  # Hold right.
+                self.assertEqual(self.window.mouse_output.held_buttons, ("left", "right"))
+                self.mouse_backend.reset_mock()
+                if action == "pause":
+                    self.window.onOffAction.trigger()
+                elif action == "settings":
+                    self.window.codeslayoutview.settingsRequested.emit()
+                else:
+                    self.window.quitAction.trigger()
+                self.assertEqual(self.mouse_backend.mock_calls,
+                                 [call.release("right"), call.release("left")])
+                self.assertEqual(self.window.mouse_output.held_buttons, ())
+                self.assertIsNone(self.window.listenerThread)
+        self.quit_app.assert_called_once_with()
+
+    def test_explicit_mouse_release_code_releases_only_our_held_buttons(self):
+        self.enter_code("2122122")  # An idle release must not lift physical buttons.
+        self.assertEqual(self.mouse_backend.mock_calls, [])
+        self.enter_code("2122121")
+        self.mouse_backend.reset_mock()
+        self.enter_code("2122122")
+        self.enter_code("2122122")
+        self.assertEqual(self.mouse_backend.mock_calls, [call.release("left")])
+        self.assertEqual(self.window.mouse_output.held_buttons, ())
+
+    def test_click_and_double_click_end_the_existing_morse_drag(self):
+        for code, operation in (("2122111", "click"), ("2122112", "double_click")):
+            with self.subTest(operation=operation):
+                self.enter_code("2122121")
+                self.mouse_backend.reset_mock()
+                self.enter_code(code)
+                self.assertEqual(self.mouse_backend.mock_calls, [
+                    call.release("left"), getattr(call, operation)(button="left"),
+                ])
+                self.assertEqual(self.window.mouse_output.held_buttons, ())
+                self.window.resetOutput()
+                self.assertEqual(self.mouse_backend.release.call_args_list, [call("left")])
+
+    def test_keyboard_release_failure_does_not_skip_mouse_cleanup(self):
+        self.enter_code("21212")  # Hold Ctrl.
+        self.enter_code("2122121")
+        self.mouse_backend.reset_mock()
+        self.backend.release.side_effect = OSError("keyboard release failed")
+        try:
+            with self.assertLogs(level="ERROR"):
+                self.assertFalse(self.window.resetOutput())
+            self.mouse_backend.release.assert_called_once_with("left")
+            self.assertEqual(self.window.mouse_output.held_buttons, ())
+            self.assertEqual(self.window.key_output.held_modifiers, ("ctrl",))
+        finally:
+            self.backend.release.side_effect = None
+            self.window.resetOutput()
 
     def test_mouse_movement_codes_keep_all_eight_directions_and_three_distances(self):
         directions = (
@@ -277,13 +340,12 @@ class MappingActionTests(unittest.TestCase):
             ((-1, -1), ('2121121', '2121122', '2121211')),
             ((-1, 1), ('2121212', '2121221', '2121222')),
         )
-        with patch.object(morse.mouse, 'move') as move:
-            for (x, y), codes in directions:
-                for distance, code in zip((5, 40, 250), codes):
-                    with self.subTest(direction=(x, y), distance=distance):
-                        move.reset_mock()
-                        self.enter_code(code)
-                        move.assert_called_once_with(x * distance, y * distance, False)
+        for (x, y), codes in directions:
+            for distance, code in zip((5, 40, 250), codes):
+                with self.subTest(direction=(x, y), distance=distance):
+                    self.mouse_backend.move.reset_mock()
+                    self.enter_code(code)
+                    self.mouse_backend.move.assert_called_once_with(x * distance, y * distance, False)
         self.assertEqual(self.backend.mock_calls, [])
 
 

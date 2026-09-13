@@ -150,7 +150,7 @@ class WindowListenerLifecycleTests(unittest.TestCase):
             inputError=Mock(), processEngineEvents=Mock(),
             currentCharacter=[1, 2], repeaton=True, showNormal=Mock(),
             onOffAction=Mock(), updateTrayInputState=Mock(), goForIt=Mock(),
-            key_output=Mock(), updateOutputState=Mock(),
+            key_output=Mock(), mouse_output=Mock(), updateOutputState=Mock(),
             resetPinyinLayer=Mock(), layer_gesture=morse.HoldTapGesture(),
             processGestureEvents=Mock(), applyImeSync=Mock(),
             get_configured_keys=Mock(return_value=["space"]),

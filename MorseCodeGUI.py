@@ -20,6 +20,8 @@ import mouse
 import icons_rc
 from ui_theme import ThemeManager
 from keyboard_output import KeyboardOutput
+from mouse_output import MouseOutput
+from config_store import read_config, write_config
 from virtual_keyboard import VirtualKeyboardView
 from morse_engine import MorseEngine
 from input_listener import KeyListenerThread
@@ -36,10 +38,7 @@ from app_paths import user_data_dir as writable_user_data_dir
 
 # Logging is installed by the executable; importing the UI never overwrites logs.
 
-# # If you want to the console
-# logging.basicConfig(level=logging.DEBUG,format='%(name)s - %(levelname)s - %(message)s')
-
-# If configfile file is lost.. 
+# First-run defaults; invalid persisted fields fall back individually.
 DEFAULT_CONFIG = {
   "theme": "system",
   "guide_auto_fit": True,
@@ -254,6 +253,7 @@ class ConfigManager:
         }
         self.config_file = config_file or os.path.join(writable_user_data_dir(), 'config.json')
         self.default_config = default_config
+        self.last_save_error = None
         self.keystrokemap, self.keystrokes = self.initKeystrokeMap()
         self.config = self.read_config()
         self.actions = {}
@@ -269,45 +269,19 @@ class ConfigManager:
 
 
     def read_config(self):
-        if self.config_file and os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, "r") as file:
-                    data = json.load(file)
-                    for key in ('guide_layout', 'code_profile', 'SoundDit', 'SoundDah',
-                                'SoundTyping', 'withdebug', 'debug'):
-                        data.pop(key, None)
-                    # self.update_keystrokes(data) # Note:cause issue to save configuration
-                    self.convert_types(data)
-                    if 'keyer_mode' not in data:
-                        data['keyer_mode'] = 'iambic' if data.get('fastMorseMode', False) else 'manual'
-                    return dict(self.default_config, **data)
-            except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
-                logging.warning(f"Error loading configuration: {e}")
-        config = self.default_config.copy()
-        config['fastMorseMode'] = config.get('fastMorseMode', False)  # Default to False if not set
-        return config
-
-
-    def update_keystrokes(self, data):
-        for key in ['keyone', 'keytwo', 'keythree']:
-            if key in data and data[key] in self.keystrokemap:
-                data[key] = self.keystrokemap[data[key]]
-
-    def convert_types(self, data):
-        if 'maxDitTime' in data:
-            data['maxDitTime'] = float(data['maxDitTime'])
-        if 'minLetterPause' in data:
-            data['minLetterPause'] = float(data['minLetterPause'])
-        if 'fontsizescale' in data:
-            data['fontsizescale'] = int(data['fontsizescale'])
+        keys = set(self.keystrokemap) | {f'F{number}' for number in range(13, 25)} | {'MOUSE_X1', 'MOUSE_X2'}
+        return read_config(self.config_file, self.default_config, valid_keys=keys)
 
     def save_config(self, config):
         try:
-            with open(self.config_file, "w") as file:
-                json.dump(config, file, indent=4)   # self.config
-            self.config = dict(config)
-        except Exception as e:
-            logging.warning(f"Error saving configuration: {e}")
+            write_config(self.config_file, config)
+        except (OSError, ValueError, TypeError) as error:
+            self.last_save_error = str(error)
+            logging.exception('保存配置失败，原文件已保留')
+            return False
+        self.config = dict(config)
+        self.last_save_error = None
+        return True
 
     def get_config(self):
         return self.config
@@ -324,7 +298,7 @@ class ConfigManager:
             toggle_action = value.get('toggle_action', False)
 
             if key.startswith('MOUSE'):
-                actions[key.upper()] = lambda item, lbl=label, kc=key_code, a=arg: MouseAction(item, a, lbl, kc)
+                actions[key.upper()] = lambda item, lbl=label, kc=key_code, win=window: MouseAction(item, lbl, kc, win)
             else:
                 # Correctly capture the loop variables using default values in lambda
                 actions[key.upper()] = lambda item, win=window, lbl=label, kc=key_code, char=character, a=arg, tog=toggle_action: ActionKeyStroke(
@@ -385,23 +359,6 @@ class LayoutManager:
     def get_active_layout(self):
         return self.layouts['desktop']
 
-def moveMouse(x_delta, y_delta):
-    logging.info(f"moveMouse to {x_delta} {y_delta}")
-    # current_pos = mouse.get_position()
-    # new_pos = (current_pos[0] + x_delta, current_pos[1] + y_delta)
-    mouse.move(x_delta, y_delta, False)
-
-def clickMouse(button='left', action='click'):
-    logging.info(f"clickMouse to {button} {action}")
-    btn = mouse.LEFT if button == 'left' else mouse.RIGHT
-    if action == 'click':
-        mouse.click(btn)
-    elif action == 'press':
-        mouse.press(btn)
-    elif action == 'release':
-        mouse.release(btn)
-
-
 class Action (object):
     def __init__(self, item):
         self.item = item
@@ -449,28 +406,29 @@ class MouseAction(Action):
         'MOUSERELEASEHOLD': (('release', mouse.LEFT), ('release', mouse.RIGHT)),
     }
 
-    def __init__(self, item, arg, label, key=None):
+    def __init__(self, item, label, key, window):
         super().__init__(item)
-        self.arg = arg
         self.label = label
         self.key = key
+        self.window = window
 
     def getlabel (self):
         return self.label
 
 
     def perform(self):
+        output = self.window.mouse_output
         if self.key in self.MOVEMENTS:
-            moveMouse(*self.MOVEMENTS[self.key])
+            output.move(*self.MOVEMENTS[self.key], False)
+            return
+        if self.key == 'MOUSERELEASEHOLD':
+            output.reset()
             return
         operations = self.BUTTON_OPERATIONS.get(self.key)
         if operations is None:
             raise ValueError('未支持的鼠标动作：' + str(self.key))
         for operation, button in operations:
-            if operation == 'double_click':
-                mouse.double_click(button=button)
-            else:
-                clickMouse(button, operation)
+            getattr(output, operation)(button)
 
 
 class KeyStroke:
@@ -492,13 +450,6 @@ class ActionKeyStroke(Action):
     @property
     def name(self):
         return self.key
-
-    @property
-    def repeaton(self):
-        return self.window.repeaton  # Access dynamically
-
-    def set_repeaton(self, repeaton):
-        self.window.repeaton = repeaton
 
     def getlabel(self):
         # Returns the label associated with this action, if any.
@@ -530,6 +481,7 @@ class Window(QDialog):
         self.configManager = configManager
         self.config = self.configManager.get_config()
         self.key_output = KeyboardOutput()
+        self.mouse_output = MouseOutput()
         self.actions = {}
         self.keystrokes = []
         self.keystrokemap = {}
@@ -542,6 +494,7 @@ class Window(QDialog):
         self.repeaton = False
 
         self._shutting_down = False
+        self._last_save_error = None
         self._start_hidden = False
         self._desktop_integration_started = False
         self.startup_registration = StartupRegistration()
@@ -623,6 +576,10 @@ class Window(QDialog):
         self.settings_scroll.setFrameShape(QScrollArea.NoFrame)
         self.settings_scroll.setWidget(self.iconGroupBox)
         mainLayout.addWidget(self.settings_scroll, 1)
+        self.configSaveStatus = QLabel()
+        self.configSaveStatus.setWordWrap(True)
+        self.configSaveStatus.hide()
+        mainLayout.addWidget(self.configSaveStatus)
         self.settings_actions = QWidget()
         buttons = ResponsiveSettingsRow(self.settings_actions)
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -703,7 +660,7 @@ class Window(QDialog):
     def saveAudioDevice(self, name):
         self.config['audio_device'] = name
         self.configManager.config['audio_device'] = name
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def audioError(self, message):
         logging.error('Audio output: %s', message)
@@ -748,7 +705,7 @@ class Window(QDialog):
         self.config['theme'] = mode
         self.configManager.config['theme'] = mode
         QApplication.instance().theme_manager.set_mode(mode)
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def changeMouseVisibility(self, visible):
         self.config['show_mouse'] = bool(visible)
@@ -756,7 +713,7 @@ class Window(QDialog):
         self.showMouseCheckBox.setChecked(bool(visible))
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setMouseVisible(bool(visible))
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def changeGuideAutoFit(self, enabled):
         self.config['guide_auto_fit'] = bool(enabled)
@@ -764,7 +721,7 @@ class Window(QDialog):
         self.guideAutoFitCheckBox.setChecked(bool(enabled))
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setAutoFit(bool(enabled))
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def updateOutputState(self):
         if self.codeslayoutview is not None:
@@ -778,17 +735,17 @@ class Window(QDialog):
         self.compactGuideAction.setChecked(enabled)
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setCompactMode(enabled)
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def changeGuideCompactScale(self, scale):
         self.config['guide_compact_scale'] = float(scale)
         self.configManager.config['guide_compact_scale'] = float(scale)
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def changeGuidePositions(self, positions):
         self.config['guide_positions'] = dict(positions)
         self.configManager.config['guide_positions'] = dict(positions)
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
 
     def toggleSound(self):
         self.config['withsound'] = not self.config['withsound']
@@ -796,6 +753,31 @@ class Window(QDialog):
         self.updateAudioProperties()
         self.updateOutputState()
 
+
+    def saveConfig(self, config):
+        if self.configManager.save_config(config):
+            self._last_save_error = None
+            self.configSaveStatus.clear()
+            self.configSaveStatus.hide()
+            return True
+        # Keep the attempted preferences as the next automatic save's baseline.
+        # The file remains unchanged, but a later theme/position save must not
+        # silently discard settings whose earlier write failed.
+        self.configManager.config = dict(config)
+        message = '设置保存失败，原配置文件已保留。请检查磁盘空间或文件权限，然后重试保存。'
+        self.configSaveStatus.setText(message)
+        self.configSaveStatus.show()
+        error = self.configManager.last_save_error
+        new_error = error != self._last_save_error
+        self._last_save_error = error
+        if not self._shutting_down and new_error:
+            if self.isVisible():
+                QMessageBox.warning(self, '设置保存失败', message)
+            else:
+                self.trayIcon.showMessage('设置保存失败', message, QSystemTrayIcon.Warning)
+                if self.codeslayoutview is not None:
+                    self.codeslayoutview.showMessage(message, False)
+        return False
 
     def collect_config(self):
         config = {
@@ -878,14 +860,15 @@ class Window(QDialog):
         logging.info('Input hooks, output state and audio stopped')
 
     def resetOutput(self):
-        try:
-            self.key_output.reset()
-            return True
-        except Exception:
-            # A device/output failure must never prevent timers/audio/Qt
-            # objects from being stopped. Failed modifiers remain retryable.
-            logging.exception('Unable to release one or more output modifiers')
-            return False
+        success = True
+        for name, output in (('keyboard', self.key_output), ('mouse', self.mouse_output)):
+            try:
+                output.reset()
+            except Exception:
+                # Always try both devices; failed owned presses remain retryable.
+                logging.exception('Unable to release owned %s buttons', name)
+                success = False
+        return success
 
     def setIcon(self):
         icon = QIcon(':/morse-writer.ico')
@@ -943,7 +926,7 @@ class Window(QDialog):
                       pinyin_ime_sync=self.imeSyncCheck.isChecked())
         self.config.update(values)
         self.configManager.config.update(values)
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
         self.applyGuideHotkey()
 
     def pinyinKeyReady(self, key):
@@ -1213,7 +1196,7 @@ class Window(QDialog):
             return
         self.config['guide_hotkey'] = sequence
         self.configManager.config['guide_hotkey'] = sequence
-        self.configManager.save_config(self.configManager.config)
+        self.saveConfig(self.configManager.config)
         self.applyGuideHotkey()
         if not sequence:
             self.hotkeyStatus.setText('快捷键已关闭')
@@ -1410,6 +1393,7 @@ class Window(QDialog):
         self.themeComboBox.currentIndexChanged.connect(self.changeTheme)
         appearance.addRow('界面主题：', self.themeComboBox)
         self.guideAutoFitCheckBox = QCheckBox('码表自动适应窗口')
+        self.guideAutoFitCheckBox.setToolTip('关闭后，英文完整码表可按设置字号滚动查看。拼音与精简码表始终适应窗口；精简模式可拖动边缘调整大小。')
         self.guideAutoFitCheckBox.setChecked(self.config.get('guide_auto_fit', True))
         self.guideAutoFitCheckBox.clicked.connect(self.changeGuideAutoFit)
         self.showMouseCheckBox = QCheckBox('显示鼠标对照')
@@ -1581,7 +1565,7 @@ class Window(QDialog):
         except (ValueError, TypeError) as error:
             QMessageBox.warning(self, '设置无效', str(error) or '请检查输入及声音设置。')
             return
-        self.configManager.save_config(self.config)
+        self.saveConfig(self.config)
         self.applyGuideHotkey()
 
     def changeAudioDevice(self):

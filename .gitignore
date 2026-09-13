@@ -5,7 +5,6 @@ build/
 Thumbs.db
 __pycache__/
 dist/
-requirements.txt
 venv/
 .venv/
 user_data/*.sqlite*

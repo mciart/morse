@@ -27,6 +27,87 @@ def pcm_samples(data):
 
 
 class ToneRendererTests(unittest.TestCase):
+    def test_idle_blocks_advance_clock_without_sampling_and_keep_the_next_dot(self):
+        whole = ToneRenderer(frequency=617, channels=1)
+        chunked = ToneRenderer(frequency=617, channels=1)
+        chunks = (137, 0, 48000, 257)
+        with patch('tone_audio.math.sin', side_effect=AssertionError('idle oscillator sampled')):
+            self.assertEqual(whole.render(sum(chunks)), bytes(sum(chunks) * 2))
+            for count in chunks:
+                self.assertEqual(chunked.render(count), bytes(count * 2))
+        self.assertEqual(whole._frame, sum(chunks))
+        self.assertEqual(chunked._frame, whole._frame)
+        self.assertEqual(chunked._phase, whole._phase)
+        # A frequency change during idle starts a new phase origin, without
+        # making the following mark depend on how the quiet PCM was divided.
+        whole.frequency = chunked.frequency = 843
+        self.assertEqual(whole.render(701), chunked.render(29) + chunked.render(672))
+        for renderer in (whole, chunked):
+            renderer.queue_tone(True, 20.0)
+            renderer.queue_tone(False, 20.08)
+        dot = whole.render(4800)
+        self.assertEqual(dot, chunked.render(73) + chunked.render(4727))
+        samples = pcm_samples(dot)
+        self.assertTrue(any(samples[480:3360]))
+        self.assertFalse(any(samples[4128:]))
+
+    def test_silent_gaps_preserve_queued_edges_across_arbitrary_pcm_chunks(self):
+        for rate, channels in ((48000, 1), (44100, 2)):
+            with self.subTest(sample_rate=rate, channels=channels):
+                whole = ToneRenderer(sample_rate=rate, channels=channels, frequency=643)
+                chunked = ToneRenderer(sample_rate=rate, channels=channels, frequency=643)
+                for renderer in (whole, chunked):
+                    for active, timestamp in ((True, 10), (False, 10.08),
+                                              (True, 10.20), (False, 10.44),
+                                              (True, 10.80), (False, 10.86)):
+                        renderer.queue_tone(active, timestamp)
+                expected = whole.render(rate)
+                parts, remaining = [], rate
+                sizes = (1, 113, 287, 960, 17, 2048)
+                index = 0
+                while remaining:
+                    count = min(remaining, sizes[index % len(sizes)])
+                    parts.append(chunked.render(count))
+                    remaining -= count
+                    index += 1
+                self.assertEqual(expected, b''.join(parts))
+                self.assertEqual(chunked._frame, rate)
+                self.assertFalse(chunked._edges)
+                self.assertFalse(chunked._playing_tone)
+                samples = pcm_samples(expected)[::channels]
+                self.assertFalse(any(samples[round(rate * .10):round(rate * .19)]))
+                self.assertTrue(any(samples[round(rate * .21):round(rate * .43)]))
+                self.assertFalse(any(samples[round(rate * .46):round(rate * .79)]))
+                self.assertTrue(any(samples[round(rate * .81):round(rate * .85)]))
+                self.assertFalse(any(samples[round(rate * .88):]))
+
+    def test_idle_optimization_keeps_preview_confirmation_and_muted_frame_timing(self):
+        for effect, enabled in (('preview', True), ('preview', False), ('confirm', True)):
+            with self.subTest(effect=effect, enabled=enabled):
+                whole = ToneRenderer(channels=1)
+                chunked = ToneRenderer(channels=1)
+                for renderer in (whole, chunked):
+                    renderer.enabled = enabled
+                    self.assertEqual(renderer.render(137), bytes(274))
+                    if effect == 'preview':
+                        renderer.preview(50)
+                    else:
+                        renderer.confirm()
+                actual = whole.render(5000)
+                self.assertEqual(actual, b''.join(chunked.render(count)
+                                                for count in (1, 287, 12, 2350, 2350)))
+                samples = pcm_samples(actual)
+                self.assertTrue(any(samples[:2400]))
+                self.assertFalse(any(samples[3000:]))
+                self.assertEqual(whole._frame, 5137)
+                self.assertEqual(chunked._frame, whole._frame)
+                self.assertIsNone(whole._preview)
+                self.assertIsNone(whole._confirmation)
+                whole.enabled = chunked.enabled = True
+                whole.set_tone(True)
+                chunked.set_tone(True)
+                self.assertEqual(whole.render(1000), chunked.render(1000))
+
     def test_silence_and_stereo_frame_format(self):
         renderer = ToneRenderer()
         self.assertEqual(renderer.render(137), bytes(137 * 4))

@@ -35,6 +35,7 @@ class MorseEngine:
         self._clear()
 
     def _clear(self):
+        self._last_feedback = None
         self.held = set()
         self.symbols = []
         self.tone = False
@@ -170,13 +171,18 @@ class MorseEngine:
         remaining = (max(0.0, self._commit_at - self._now)
                      if self._commit_at is not None else None)
         progress = 0.0 if remaining is None else max(0.0, min(1.0, 1 - remaining / self.character_gap))
-        self._emit('feedback', held=tuple(sorted(self.held)), symbols=tuple(self.symbols),
-                   tone=self.tone, progress=progress,
-                   remaining_ms=None if remaining is None else remaining * 1000,
-                   sounding=(None if not self.tone else 'straight' if self.mode == 'straight'
-                             else 'dot' if self._last_symbol == 1 else 'dash'),
-                   blocked=tuple(sorted(self._blocked_roles)),
-                   mode=self.mode)
+        feedback = dict(held=tuple(sorted(self.held)), symbols=tuple(self.symbols),
+                        tone=self.tone, progress=progress,
+                        remaining_ms=None if remaining is None else remaining * 1000,
+                        sounding=(None if not self.tone else 'straight' if self.mode == 'straight'
+                                  else 'dot' if self._last_symbol == 1 else 'dash'),
+                        blocked=tuple(sorted(self._blocked_roles)), mode=self.mode)
+        # Keep the engine's precise clock running, but do not notify the GUI
+        # when only the timestamp changed. Clearing the engine invalidates this
+        # cache so initial state and every reset still produce fresh feedback.
+        if feedback != self._last_feedback:
+            self._last_feedback = feedback
+            self._emit('feedback', **feedback)
 
     def key(self, role, pressed, timestamp=None):
         role = int(role)

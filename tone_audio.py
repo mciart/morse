@@ -29,6 +29,7 @@ class ToneRenderer:
         self.enabled = True
         self.tone = False
         self._phase = 0.0
+        self._silence_phase = None
         self._level = 0.0
         self._ramp_frames = max(1, round(self.sample_rate * envelope_ms / 1000))
         self._confirmation = None
@@ -105,51 +106,76 @@ class ToneRenderer:
         self.stop()
         self._level = 0.0
         self._phase = 0.0
+        self._silence_phase = None
+
+    def _advance_silence(self, frame_count, phase_step):
+        # Use one origin for the entire silent span: advancing each render
+        # chunk separately would make the next audible phase depend on its size.
+        if self._silence_phase is None or self._silence_phase[2] != phase_step:
+            self._silence_phase = (self._phase, self._frame, phase_step)
+        phase, origin, _ = self._silence_phase
+        self._frame += frame_count
+        self._phase = (phase + (self._frame - origin) * phase_step) % math.tau
 
     def render(self, frame_count):
         frame_count = max(0, int(frame_count))
         if not self.enabled:
             self._level = 0.0
             self._confirmation = None
-            if self._preview is None:
-                return bytes(frame_count * self.bytes_per_frame)
         samples = array("h")
         phase_step = math.tau * self.frequency / self.sample_rate
         ramp_step = 1.0 / self._ramp_frames
-        for _ in range(frame_count):
+        remaining = frame_count
+        while remaining:
             while self._edges and self._edges[0][0] <= self._frame:
                 _, self._playing_tone = self._edges.popleft()
             target = 1.0 if self._playing_tone and self.enabled else 0.0
-            if self._level < target:
-                self._level = min(target, self._level + ramp_step)
-            elif self._level > target:
-                self._level = max(target, self._level - ramp_step)
-            value = 0.7 * self._level * math.sin(self._phase)
-            self._phase = (self._phase + phase_step) % math.tau
-            if self._confirmation is not None:
-                position, duration, frequency = self._confirmation
-                fade = min(1.0, position / self._ramp_frames,
-                           (duration - position) / self._ramp_frames)
-                value += 0.12 * fade * math.sin(self._confirmation_phase)
-                self._confirmation_phase = (
-                    self._confirmation_phase + math.tau * frequency / self.sample_rate
-                ) % math.tau
-                self._confirmation[0] += 1
-                if self._confirmation[0] >= duration:
-                    self._confirmation = None
-            if self._preview is not None:
-                position, duration = self._preview
-                fade = min(1.0, position / self._ramp_frames,
-                           (duration - position) / self._ramp_frames)
-                # The Morse sidetone takes priority over the test tone.
-                value += 0.7 * (1.0 - self._level) * fade * math.sin(self._preview_phase)
-                self._preview_phase = (self._preview_phase + phase_step) % math.tau
-                self._preview[0] += 1
-                if self._preview[0] >= duration:
-                    self._preview = None
-            sample = round(value * self.volume * 32767)
-            samples.extend([sample] * self.channels)
-            self._frame += 1
+            segment_frames = min(remaining, self._edges[0][0] - self._frame) if self._edges else remaining
+            if (target == 0.0 and self._level == 0.0
+                    and self._confirmation is None and self._preview is None):
+                self._advance_silence(segment_frames, phase_step)
+                samples.frombytes(bytes(segment_frames * self.bytes_per_frame))
+                remaining -= segment_frames
+                continue
+            self._silence_phase = None
+            # The gate stays fixed until the next queued edge. Keep the sound
+            # loop free of per-sample queue lookups; only an ended fade/extra
+            # oscillator can bring this segment back to the silence path early.
+            for rendered in range(1, segment_frames + 1):
+                if self._level < target:
+                    self._level = min(target, self._level + ramp_step)
+                elif self._level > target:
+                    self._level = max(target, self._level - ramp_step)
+                value = 0.7 * self._level * math.sin(self._phase)
+                self._phase = (self._phase + phase_step) % math.tau
+                if self._confirmation is not None:
+                    position, duration, frequency = self._confirmation
+                    fade = min(1.0, position / self._ramp_frames,
+                               (duration - position) / self._ramp_frames)
+                    value += 0.12 * fade * math.sin(self._confirmation_phase)
+                    self._confirmation_phase = (
+                        self._confirmation_phase + math.tau * frequency / self.sample_rate
+                    ) % math.tau
+                    self._confirmation[0] += 1
+                    if self._confirmation[0] >= duration:
+                        self._confirmation = None
+                if self._preview is not None:
+                    position, duration = self._preview
+                    fade = min(1.0, position / self._ramp_frames,
+                               (duration - position) / self._ramp_frames)
+                    # The Morse sidetone takes priority over the test tone.
+                    value += 0.7 * (1.0 - self._level) * fade * math.sin(self._preview_phase)
+                    self._preview_phase = (self._preview_phase + phase_step) % math.tau
+                    self._preview[0] += 1
+                    if self._preview[0] >= duration:
+                        self._preview = None
+                sample = round(value * self.volume * 32767)
+                samples.extend([sample] * self.channels)
+                if (target == 0.0 and self._level == 0.0
+                        and self._confirmation is None and self._preview is None):
+                    break
+            self._frame += rendered
+            remaining -= rendered
         if sys.byteorder != "little":
             samples.byteswap()
         return samples.tobytes()

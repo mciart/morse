@@ -130,6 +130,52 @@ class WindowBehaviorTests(unittest.TestCase):
             self.assertEqual(loaded[key], settings[key])
         self.assertEqual(path.read_text(encoding='utf-8'), source)
 
+    def test_failed_save_is_visible_once_and_retry_clears_the_error(self):
+        import config_store
+        path = Path(self.window.configManager.config_file)
+        original = path.read_bytes()
+        self.window.wpmEdit.setValue(22)
+        with patch.object(config_store.os, 'replace', side_effect=PermissionError('locked')), \
+             patch.object(morse.QMessageBox, 'warning',
+                          side_effect=lambda *args: self.window.saveConfig(self.window.config)) as warning, \
+             self.assertLogs(level='ERROR'):
+            self.window.SaveButton.click()
+            self.window.SaveButton.click()
+        warning.assert_called_once()
+        self.assertTrue(self.window.configSaveStatus.isVisible())
+        self.assertIn('设置保存失败', self.window.configSaveStatus.text())
+        self.assertEqual(path.read_bytes(), original)
+        self.window.SaveButton.click()
+        self.assertTrue(self.window.configSaveStatus.isHidden())
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['wpm'], 22)
+
+    def test_background_save_failure_notifies_without_activating_settings(self):
+        import config_store
+        view, _ = self.start_input()
+        with patch.object(config_store.os, 'replace', side_effect=PermissionError('locked')), \
+             patch.object(morse.QMessageBox, 'warning') as warning, \
+             patch.object(self.window.trayIcon, 'showMessage') as notify, \
+             patch.object(view, 'showMessage') as message, self.assertLogs(level='ERROR'):
+            self.window.changeGuidePositions({'full': {'x': 20, 'y': 30}})
+        warning.assert_not_called()
+        notify.assert_called_once()
+        message.assert_called_once()
+        self.assertFalse(self.window.isVisible())
+
+    def test_automatic_retry_preserves_settings_from_a_failed_explicit_save(self):
+        import config_store
+        self.window.wpmEdit.setValue(22)
+        with patch.object(config_store.os, 'replace', side_effect=PermissionError('locked')), \
+             patch.object(morse.QMessageBox, 'warning'), self.assertLogs(level='ERROR'):
+            self.window.SaveButton.click()
+        self.assertTrue(self.window.configSaveStatus.isVisible())
+        selector = self.window.themeComboBox
+        selector.setCurrentIndex(selector.findData('dark'))
+        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
+        self.assertEqual(saved['wpm'], 22)
+        self.assertEqual(saved['theme'], 'dark')
+        self.assertTrue(self.window.configSaveStatus.isHidden())
+
     def test_conflicting_old_layout_uses_current_guide_and_explains_once(self):
         path = Path(self.enterContext(TemporaryDirectory())) / 'layouts.json'
         data = {'layouts': {'desktop': {'items': [
