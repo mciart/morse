@@ -7,11 +7,12 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyq
 from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPen, QTransform
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFrame, QGraphicsScene, QGraphicsView, QGridLayout,
-    QHBoxLayout, QLabel, QMenu, QProgressBar, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QStatusBar, QVBoxLayout, QWidget,
 )
 
 from ui_theme import THEME_COLORS
-from windows_integration import show_guide_without_activation
+from windows_integration import (show_guide_without_activation, protect_guide_window,
+                                 guide_mouse_activation_event, NonActivatingMenu)
 
 
 def morse(code):
@@ -421,6 +422,7 @@ class VirtualKeyboardView(QWidget):
     autoFitChanged = pyqtSignal(bool)
     compactModeChanged = pyqtSignal(bool)
     compactScaleChanged = pyqtSignal(float)
+    guidePositionsChanged = pyqtSignal(dict)
 
     DISPLAY_NAMES = {
         'ESCAPE': 'Esc', 'TAB': 'Tab', 'TABLEFT': 'Shift+Tab',
@@ -456,6 +458,18 @@ class VirtualKeyboardView(QWidget):
         self._drag_offset = None
         self._resize_edges = Qt.Edges()
         self._resize_origin = None
+        self._position_guard = 1
+        saved_positions = config.get('guide_positions')
+        self._positions = dict(saved_positions) if isinstance(saved_positions, dict) else {}
+        self._position_pending = False
+        self._position_restore_pending = False
+        self._position_timer = QTimer(self)
+        self._position_timer.setSingleShot(True)
+        self._position_timer.setInterval(300)
+        self._position_timer.timeout.connect(self.flushPosition)
+        self._position_restore_timer = QTimer(self)
+        self._position_restore_timer.setSingleShot(True)
+        self._position_restore_timer.timeout.connect(self._finishPositionRestore)
         self._screen = None
         self._screen_window = None
         self._screen_dirty = False
@@ -469,10 +483,10 @@ class VirtualKeyboardView(QWidget):
         app.primaryScreenChanged.connect(self._onScreenTopologyChanged)
         self.setWindowTitle('摩斯输入 · 键盘与鼠标')
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
-        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint |
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus |
                             Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.NoFocus)
         self.setMinimumSize(360, 280)
         self._build()
         self.updateTheme()
@@ -484,6 +498,86 @@ class VirtualKeyboardView(QWidget):
             self.scroll_area._fitBoard()
             self.setCompactMode(True)
         self._bindWindowScreen()
+        self._restorePosition()
+        self._position_guard = 0
+
+    def _rememberPosition(self):
+        if (self._position_guard or self._position_restore_pending or self._screen_refreshing or not self.isVisible() or
+                self.isMinimized() or self.isMaximized()):
+            return
+        screen = QApplication.screenAt(self.frameGeometry().center()) or self._screen
+        if screen is None or sip.isdeleted(screen):
+            return
+        available = screen.availableGeometry()
+        position = {'x': self.pos().x(), 'y': self.pos().y(), 'screen': screen.name(),
+                    'available': [available.x(), available.y(), available.width(), available.height()]}
+        mode = 'compact' if self._compact_mode else 'full'
+        if position == self._positions.get(mode):
+            return
+        self._positions[mode] = position
+        self.config['guide_positions'] = dict(self._positions)
+        self._position_pending = True
+        self._position_timer.start()
+
+    def flushPosition(self):
+        self._position_timer.stop()
+        if self._position_pending:
+            self._position_pending = False
+            self.guidePositionsChanged.emit(dict(self._positions))
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, '_position_timer'):
+            self._rememberPosition()
+
+    def hideEvent(self, event):
+        if hasattr(self, '_position_timer'):
+            self.flushPosition()
+        super().hideEvent(event)
+
+    def _restorePosition(self):
+        position = self._positions.get('compact' if self._compact_mode else 'full')
+        if not isinstance(position, dict):
+            return
+        x, y = position.get('x'), position.get('y')
+        if any(type(value) is not int or abs(value) > 10000000 for value in (x, y)):
+            return
+        screens = QApplication.screens()
+        screen = next((item for item in screens if item.name() == position.get('screen')), None)
+        previous = position.get('available')
+        if screen is not None and isinstance(previous, (list, tuple)) and len(previous) == 4 and all(
+                type(value) is int and abs(value) <= 10000000 for value in previous):
+            # Keep the offset on a monitor when Windows rearranges the desktop.
+            x += screen.availableGeometry().x() - previous[0]
+            y += screen.availableGeometry().y() - previous[1]
+        screen = screen or QApplication.screenAt(QPoint(x, y)) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        self._position_guard += 1
+        try:
+            self.move(x, y)
+            if self._compact_mode:
+                self._fitCompactWindow(available)
+            else:
+                self._fitFullWindow(available)
+        finally:
+            self._position_guard -= 1
+
+    def _finishPositionRestore(self):
+        if self._position_restore_pending and not (self.isMinimized() or self.isMaximized()):
+            self._restorePosition()
+            self._position_restore_pending = False
+
+    def _fitFullWindow(self, available):
+        extra = self.frameGeometry().size() - self.size()
+        self.resize(min(self.width(), max(1, available.width() - max(0, extra.width()))),
+                    min(self.height(), max(1, available.height() - max(0, extra.height()))))
+        frame = self.frameGeometry()
+        target = QPoint(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)),
+                        max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
+        if target != frame.topLeft():
+            self.move(self.pos() + target - frame.topLeft())
 
     def _availableGeometry(self):
         return QApplication.desktop().availableGeometry(self)
@@ -543,26 +637,36 @@ class VirtualKeyboardView(QWidget):
             if self._compact_mode:
                 self._fitCompactWindow()
             elif not self.isMaximized():
-                available = self._availableGeometry()
-                extra = self.frameGeometry().size() - self.size()
-                self.resize(min(self.width(), max(1, available.width() - max(0, extra.width()))),
-                            min(self.height(), max(1, available.height() - max(0, extra.height()))))
-                frame = self.frameGeometry()
-                self.move(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)),
-                          max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
+                self._fitFullWindow(self._availableGeometry())
             self.outer_layout.activate()
             self.scroll_area._fitBoard()
+            if self._position_restore_pending:
+                # Qt can update frame margins after Show when changing native
+                # window flags. Reapply the saved outer position only once the
+                # new frame and board geometry have settled. A zero timer can
+                # run before Qt dispatches its queued native frame update.
+                self._position_restore_timer.start(1)
             self.update()
         finally:
             self._screen_refreshing = False
         if self._screen_dirty:
             self._scheduleScreenRefresh()
 
+    def nativeEvent(self, event_type, message):
+        result = guide_mouse_activation_event(event_type, message)
+        if result is not None:
+            return result
+        return super().nativeEvent(event_type, message)
+
     def event(self, event):
         result = super().event(event)
         if hasattr(self, '_screen_refresh_timer') and hasattr(self, 'scroll_area'):
             if event.type() in (QEvent.Show, QEvent.WinIdChange):
+                if event.type() == QEvent.Show:
+                    mode = 'compact' if self._compact_mode else 'full'
+                    self._position_restore_pending = isinstance(self._positions.get(mode), dict)
                 self._bindWindowScreen()
+                protect_guide_window(self)
                 self._scheduleScreenRefresh()
             elif event.type() in (QEvent.FontChange, QEvent.ApplicationFontChange, QEvent.WindowStateChange):
                 self._scheduleScreenRefresh()
@@ -645,7 +749,7 @@ class VirtualKeyboardView(QWidget):
         self.input_feedback = InputFeedbackPanel()
         self.input_label = self.input_feedback.code_label
         self.settings_button = QPushButton('返回设置')
-        self.settings_button.setToolTip('暂停输入并返回设置（Ctrl + Shift + P）')
+        self.settings_button.setToolTip('暂停输入并返回设置')
         self.settings_button.clicked.connect(self.settingsRequested.emit)
         self.view_options = QWidget()
         options = QHBoxLayout(self.view_options)
@@ -686,7 +790,7 @@ class VirtualKeyboardView(QWidget):
         keyboard.addLayout(self._row(['ESCAPE', (None, 4)] + ['F' + str(i) for i in range(1, 13)]))
         keyboard.addSpacing(3)
         keyboard.addLayout(self._row([
-            'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'ZERO',
+            'BACKTICK', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'ZERO',
             'MINUS', 'EQUALS', ('BACKSPACE', 20),
         ]))
         keyboard.addLayout(self._row([('TAB', 15)] + list('QWERTYUIOP') + [('BSLASH', 15)]))
@@ -859,6 +963,9 @@ class VirtualKeyboardView(QWidget):
         self.config['guide_compact'] = value
         if value == self._compact_mode:
             return
+        self._rememberPosition()
+        self.flushPosition()
+        self._position_guard += 1
         was_visible, was_minimized = self.isVisible(), self.isMinimized()
         had_native_window = self.testAttribute(Qt.WA_WState_Created)
         if value:
@@ -882,7 +989,7 @@ class VirtualKeyboardView(QWidget):
         if value:
             flags |= Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus
         else:
-            flags &= ~(Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus)
+            flags &= ~Qt.FramelessWindowHint
         self.setWindowFlags(flags)
         if had_native_window and QApplication.platformName() == 'windows':
             # Qt 5 keeps the old framed backing store when toggling translucency
@@ -893,7 +1000,7 @@ class VirtualKeyboardView(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, value)
         self.setAttribute(Qt.WA_NoSystemBackground, value)
-        self.setFocusPolicy(Qt.NoFocus if value else Qt.StrongFocus)
+        self.setFocusPolicy(Qt.NoFocus)
         self.setMinimumSize(1, 1) if value else self.setMinimumSize(360, 280)
         self.header_widget.setVisible(not value)
         self.input_feedback.setVisible(not value)
@@ -916,11 +1023,13 @@ class VirtualKeyboardView(QWidget):
         elif self._full_geometry is not None:
             self.setGeometry(self._full_geometry)
         self.outer_layout.activate()
+        self._restorePosition()
         if was_visible:
             if was_minimized:
                 show_guide_without_activation(self, keep_minimized=True)
             else:
                 show_guide_without_activation(self)
+        self._position_guard -= 1
         self.compactModeChanged.emit(value)
 
     def compactScale(self):
@@ -984,13 +1093,13 @@ class VirtualKeyboardView(QWidget):
         y = origin.bottom() + 1 - self.height() if edges & Qt.TopEdge else origin.y()
         self._moveInsideScreen(QPoint(x, y), self._availableGeometry())
 
-    def _fitCompactWindow(self):
+    def _fitCompactWindow(self, available=None):
         """Make the actual top-level rectangle match the complete board."""
         if not self._compact_mode:
             return
         self.scroll_area.refreshLayout()
         bounds = self.scroll_area.sceneRect()
-        available = self._availableGeometry()
+        available = self._availableGeometry() if available is None else available
         # Crop the currently rendered keys rather than enlarging them when the
         # surrounding controls disappear. Optional mouse keys may only reduce
         # this scale as needed to stay within the available screen.
@@ -1001,7 +1110,11 @@ class VirtualKeyboardView(QWidget):
                     min(available.height(), ceil(bounds.height() * scale)))
         self.outer_layout.activate()
         self.scroll_area._fitBoard()
-        self._moveInsideScreen(self.pos(), available)
+        self._position_guard += 1
+        try:
+            self._moveInsideScreen(self.pos(), available)
+        finally:
+            self._position_guard -= 1
 
     def _moveInsideScreen(self, position, available=None):
         if available is None:
@@ -1049,13 +1162,12 @@ class VirtualKeyboardView(QWidget):
         return super().eventFilter(watched, event)
 
     def createViewMenu(self):
-        """Provide an exit from the frameless view without a permanent toolbar."""
-        menu = QMenu(self)
-        display_action = menu.addAction('完整显示' if self._compact_mode else '精简显示')
-        target_mode = not self._compact_mode
-        display_action.triggered.connect(lambda checked=False: self.setCompactMode(target_mode))
-        if self._compact_mode:
-            zoom = menu.addMenu('调整大小')
+        """Reuse one owned popup; deleting a Qt 5 popup can break its layered parent."""
+        if not hasattr(self, '_view_menu'):
+            menu = self._view_menu = NonActivatingMenu(self)
+            self._display_action = menu.addAction('')
+            self._display_action.triggered.connect(lambda checked=False: self.setCompactMode(not self._compact_mode))
+            zoom = self._zoom_menu = menu.addMenu('调整大小')
             for text, name, callback in (
                     ('放大', 'compactZoomIn', lambda: self.setCompactScale(self.compactScale() * 1.15)),
                     ('缩小', 'compactZoomOut', lambda: self.setCompactScale(self.compactScale() / 1.15)),
@@ -1063,19 +1175,22 @@ class VirtualKeyboardView(QWidget):
                 action = zoom.addAction(text)
                 action.setObjectName(name)
                 action.triggered.connect(callback)
-        mouse_action = menu.addAction('显示鼠标')
-        mouse_action.setCheckable(True)
-        mouse_action.setChecked(self._mouse_visible)
-        mouse_action.toggled.connect(self.setMouseVisible)
-        menu.addSeparator()
-        menu.addAction('返回设置', self.settingsRequested.emit)
-        menu.addAction('隐藏码表', self.hide)
-        return menu
+            self._mouse_action = menu.addAction('显示鼠标')
+            self._mouse_action.setCheckable(True)
+            self._mouse_action.toggled.connect(self.setMouseVisible)
+            menu.addSeparator()
+            menu.addAction('返回设置', self.settingsRequested.emit)
+            menu.addAction('隐藏码表', self.hide)
+        self._display_action.setText('完整显示' if self._compact_mode else '精简显示')
+        self._zoom_menu.menuAction().setVisible(self._compact_mode)
+        self._mouse_action.blockSignals(True)
+        self._mouse_action.setChecked(self._mouse_visible)
+        self._mouse_action.blockSignals(False)
+        return self._view_menu
 
     def _showContextMenu(self, position):
         menu = self.createViewMenu()
         menu.exec_(self.scroll_area.viewport().mapToGlobal(position))
-        menu.deleteLater()
 
     def setMouseVisible(self, value):
         value = bool(value)

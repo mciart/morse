@@ -13,6 +13,10 @@ import sys
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from morse_profiles import apply_code_profile, MORSEY_REFERENCE_COMMIT
 
 
 def read_key_data(source_path):
@@ -41,13 +45,17 @@ def markdown_text(value):
 
 
 def render_chart(layout_data, key_data):
-    layouts = layout_data["layouts"]
+    layouts = apply_code_profile(layout_data["layouts"], 'morsey')
+    if 'desktop' in layouts:
+        layouts['desktop_legacy'] = apply_code_profile(layout_data['layouts'], 'legacy')['desktop']
     default_layout = layout_data["mainlayout"]
     if default_layout not in layouts:
         raise ValueError("默认码表不存在")
 
     # Page names also come from the runtime layout navigation labels.
     page_names = {name: layout['display_name'] for name, layout in layouts.items() if layout.get('display_name')}
+    if 'desktop_legacy' in layouts:
+        page_names['desktop_legacy'] = '统一面板：旧版专用'
     for layout in layouts.values():
         for item in layout["items"]:
             if item.get("action") == "CHANGELAYOUT":
@@ -60,16 +68,30 @@ def render_chart(layout_data, key_data):
         "",
         "<!-- 由 tools/generate_codechart.py 自动生成，请勿手动修改表格。 -->",
         "",
-        "编码和页面来自 [软件码表配置](user_data/layouts.json)，动作名称来自 "
-        "[软件动作定义](MorseCodeGUI.py)。此表包含所有页面的可用编码。",
+        "编码来自 [软件编码方案](morse_profiles.py) 与 [原始码表配置](user_data/layouts.json)，动作名称来自 "
+        "[软件动作定义](MorseCodeGUI.py)。此表与软件使用同一个转换函数。",
         "",
-        "`•` 表示点，`—` 表示划。统一面板中的编码互不冲突，可直接执行键盘与鼠标操作。"
-        "标点和控制键使用本软件约定的编码。",
+        "`•` 表示点，`—` 表示划。默认编码方案为“国际摩斯优先”：已有国际定义的字符优先采用 "
+        "[ITU-R M.1677-1](https://www.itu.int/dms_pubrec/itu-r/rec/m/R-REC-M.1677-1-200910-I!!PDF-E.pdf)"
+        "的编码，常见标点扩展采用通用约定。包含 A–Z、0–9 和 18 个标点，其中 53 个字符与 "
+        f"[Morsey 的实际编码表](https://github.com/dj-on-github/morsey/blob/{MORSEY_REFERENCE_COMMIT}/lib/morsey/morse_code.dart#L7)"
+        "一致，并补齐该表没有的美元符号 `$`（`•••—••—`）。参考版本固定，不会随对方项目更新而自动改变。"
+        "`!`、`&`、`;`、`_`、`$` 属于常见字符扩展，不冒充 ITU 正式定义；"
+        "18 个标点与[中文维基百科的标点表](https://zh.wikipedia.org/zh-cn/摩尔斯电码#标点符号)一致。",
+        "",
+        "反引号（`）在参考表中没有标准编码，本软件补充为七个点 `•••••••`，显示在美式键盘数字行最左侧。"
+        "它属于软件扩展，仅“国际摩斯优先”统一面板提供。",
         "",
         f"默认显示“{page_names.get(default_layout, default_layout)}”统一面板，按实体键盘与鼠标的位置排列。"
-        "键盘沿用原编码，鼠标采用独立七位码，无需切页。"
-        "后文保留旧版四页编码，供已有布局对照；兼容页中的相同编码可能执行不同动作。"
+        "F9、Delete、Tab、星号、百分号和修饰键锁定使用以点开头的独立七位码，避开标准标点；"
+        "鼠标保留以划开头的七位码，无需切页。"
+        "设置中的“旧版专用”可恢复原统一码表。两个方案不会同时生效，请按当前方案查码。"
+        "后文另列旧版四页编码，供已有布局对照；这些兼容页沿用旧编码，不受方案选项影响。"
         "缩写仅在兼容字母页输入空格完成单词后展开。",
+        "",
+        "与旧版相比，国际摩斯优先方案修正了 15 个标点：单引号、感叹号、斜杠、左右圆括号、&、冒号、分号、"
+        "等号、加号、减号、下划线、双引号、@ 和 $。回车、空格、导航键、功能键和鼠标操作是软件扩展，"
+        "并非 Morsey 的字符表；暂停不会自动输入空格。用户的原始码表文件保留不变。",
         "",
         "组合键：先输入 Ctrl，再输入 V，即执行一次 Ctrl+V，随后自动释放 Ctrl。"
         "需要连续组合键时，先开启“修饰键锁定”，再输入 Ctrl 和 V；"
@@ -77,14 +99,21 @@ def render_chart(layout_data, key_data):
         "",
     ]
 
-    page_order = [default_layout] + [name for name in layouts if name != default_layout]
+    page_order = [default_layout]
+    if 'desktop_legacy' in layouts and default_layout != 'desktop_legacy':
+        page_order.append('desktop_legacy')
+    page_order += [name for name in layouts if name not in page_order]
     for page in page_order:
         entries = [item for item in layouts[page]["items"] if not item.get("emptyspace")]
         page_name = page_names.get(page, page)
         lines.extend([
             f"## {page_name}{'（默认）' if page == default_layout else ''}",
             "",
-            f"本页共 {len(entries)} 项。以下编码仅在“{page_name}”页生效。",
+            (f"本页共 {len(entries)} 项。以下编码在统一面板选择“旧版专用”方案时生效。"
+             if page == 'desktop_legacy' else
+             f"本页共 {len(entries)} 项。以下编码在统一面板选择“国际摩斯优先”方案时生效。"
+             if page == 'desktop' else
+             f"本页共 {len(entries)} 项。以下编码仅在“{page_name}”页生效。"),
             "",
             "| 按键或操作 | 摩斯码 |",
             "| --- | --- |",

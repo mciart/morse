@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
   "guide_auto_fit": True,
   "guide_compact": False,
   "guide_compact_scale": None,
+  "guide_positions": None,
+  "code_profile": "morsey",
   "show_mouse": False,
   "keylen": 1,
   "keyone": "SPACE",
@@ -200,6 +202,7 @@ class ConfigManager:
         "EIGHT": {'label': '8', 'key_code': '8', 'character': '8', 'arg': None},
         "NINE": {'label': '9', 'key_code': '9', 'character': '9', 'arg': None},
         "ZERO": {'label': '0', 'key_code': '0', 'character': '0', 'arg': None},
+        "BACKTICK": {'label': '`', 'key_code': '`', 'character': '`', 'arg': None},
         "DOT": {'label': '.', 'key_code': '.', 'character': '.', 'arg': None},
         "COMMA": {'label': ',', 'key_code': ',', 'character': ',', 'arg': None},
         "QUESTION": {'label': '?', 'key_code': 'shift+/', 'character': '?', 'arg': None},
@@ -451,9 +454,14 @@ class KeyCombinationListener(QObject):
 
 
 class LayoutManager:
-    def __init__(self, layout_file):
+    def __init__(self, layout_file, code_profile='morsey'):
+        from morse_profiles import normalize_code_profile
         self.layout_file = layout_file
         self.layouts = {}
+        self._raw_layouts = {}
+        self._actions = None
+        self.code_profile = normalize_code_profile(code_profile)
+        self.profile_error = None
         self.active_layout_name = None
         self.main_layout_name = None
         self.load_layouts()
@@ -463,13 +471,22 @@ class LayoutManager:
         try:
             with open(self.layout_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self.layouts = {k: v for k, v in data['layouts'].items()}
+            self._raw_layouts = {k: v for k, v in data['layouts'].items()}
             # Old user layouts keep their custom keys on disk. Retired candidate
             # commands are ignored in memory when opening those layouts.
-            for layout in self.layouts.values():
+            for layout in self._raw_layouts.values():
                 layout['items'] = [item for item in layout.get('items', [])
                                    if item.get('action') != 'PREDICTION_SELECT']
                 layout.pop('supports_prediction', None)
+            from morse_profiles import apply_code_profile
+            self.profile_error = None
+            try:
+                self.layouts = apply_code_profile(self._raw_layouts, self.code_profile)
+            except ValueError as error:
+                self.profile_error = str(error)
+                self.code_profile = 'legacy'
+                self.layouts = apply_code_profile(self._raw_layouts, 'legacy')
+                logging.warning('编码方案冲突，暂用旧版专用码表：%s', error)
             self.main_layout_name = data.get('mainlayout')
             self.active_layout_name = data.get('mainlayout')
             if self.active_layout_name not in self.layouts:
@@ -481,6 +498,7 @@ class LayoutManager:
 
     def set_actions(self, actions):
         """Integrates actions with the layout items loaded from the layout file."""
+        self._actions = actions
         for layout_name, layout in self.layouts.items():
             if 'items' in layout:
                 for item in layout['items']:
@@ -490,6 +508,20 @@ class LayoutManager:
                     else:
                         item['_action'] = None
                         logging.warning(f"No action found for {action_name} in layout {layout_name}")
+
+    def set_code_profile(self, profile):
+        """Rebuild from JSON before binding actions; never copy live Qt objects."""
+        from morse_profiles import apply_code_profile, normalize_code_profile
+        profile = normalize_code_profile(profile)
+        if profile == self.code_profile:
+            return False
+        layouts = apply_code_profile(self._raw_layouts, profile)
+        self.layouts = layouts
+        self.code_profile = profile
+        self.profile_error = None
+        if self._actions is not None:
+            self.set_actions(self._actions)
+        return True
 
     def set_active(self, layout_name):
         """Sets the active layout by name."""
@@ -765,6 +797,16 @@ class Window(QDialog):
         return DEFAULT_CONFIG.copy()
 
     def init(self):
+        try:
+            self.layoutManager.set_code_profile(self.config.get('code_profile', 'morsey'))
+        except ValueError as error:
+            self.layoutManager.set_code_profile('legacy')
+            self.config['code_profile'] = 'legacy'
+            if hasattr(self, 'codeProfileComboBox'):
+                self.codeProfileComboBox.setCurrentIndex(self.codeProfileComboBox.findData('legacy'))
+            QMessageBox.warning(self, '电码冲突',
+                                '自定义码表与国际方案的编码冲突，已暂时使用旧版专用方案。\n'
+                                '请检查布局中的重复编码后再切换。\n\n' + str(error))
         self.engine_timer.stop()
         self.audio.stop()
         self.engine = MorseEngine(self.config)
@@ -943,6 +985,7 @@ class Window(QDialog):
             view.autoFitChanged.connect(self.changeGuideAutoFit)
             view.compactModeChanged.connect(self.changeGuideCompact)
             view.compactScaleChanged.connect(self.changeGuideCompactScale)
+            view.guidePositionsChanged.connect(self.changeGuidePositions)
         self.updateOutputState()
         if not self._start_hidden:
             view.show()
@@ -995,6 +1038,11 @@ class Window(QDialog):
         self.configManager.config['guide_compact_scale'] = float(scale)
         self.configManager.save_config(self.configManager.config)
 
+    def changeGuidePositions(self, positions):
+        self.config['guide_positions'] = dict(positions)
+        self.configManager.config['guide_positions'] = dict(positions)
+        self.configManager.save_config(self.configManager.config)
+
     def toggleSound(self):
         self.config['withsound'] = not self.config['withsound']
         self.withSound.setChecked(self.config['withsound'])
@@ -1010,6 +1058,7 @@ class Window(QDialog):
         config = {
             **self.config,
             'theme': self.themeComboBox.currentData(),
+            'code_profile': self.codeProfileComboBox.currentData(),
             'show_mouse': self.showMouseCheckBox.isChecked(),
             'guide_auto_fit': self.guideAutoFitCheckBox.isChecked(),
             'guide_compact': self.guideCompactCheckBox.isChecked(),
@@ -1383,6 +1432,18 @@ class Window(QDialog):
             control.valueChanged.connect(self.previewAudioSettings)
         self.confirmationSoundCheck.toggled.connect(self.previewAudioSettings)
 
+        code_profile_row = QHBoxLayout()
+        code_profile_row.addWidget(QLabel('编码方案：'))
+        self.codeProfileComboBox = QComboBox()
+        from morse_profiles import CODE_PROFILE_LABELS, normalize_code_profile
+        for mode, label in CODE_PROFILE_LABELS.items():
+            self.codeProfileComboBox.addItem(label, mode)
+        self.codeProfileComboBox.setCurrentIndex(self.codeProfileComboBox.findData(
+            normalize_code_profile(self.config.get('code_profile'))))
+        self.codeProfileComboBox.setToolTip('国际摩斯优先：标准字符采用国际电码；电脑功能键使用扩展码。旧版专用保留原来的输入习惯。重新开始输入后生效。')
+        code_profile_row.addWidget(self.codeProfileComboBox, 1)
+        inputSettingsLayout.addLayout(code_profile_row)
+
         appearance_group = QGroupBox('外观')
         appearance = QGridLayout(appearance_group)
         appearance.addWidget(QLabel('界面主题：'), 0, 0)
@@ -1565,6 +1626,8 @@ class Window(QDialog):
         logging.debug("Stopping components...")
         self.stopKeyListener()
         if self.codeslayoutview is not None:
+            if isinstance(self.codeslayoutview, VirtualKeyboardView):
+                self.codeslayoutview.flushPosition()
             self.codeslayoutview.hide()
             self.codeslayoutview.deleteLater()
             self.codeslayoutview = None
@@ -2044,7 +2107,8 @@ if __name__ == '__main__':
 
     # Initialize managers
     configmanager = ConfigManager(os.path.join(user_data_dir, "config.json"), default_config=DEFAULT_CONFIG)
-    layoutmanager = LayoutManager(os.path.join(user_data_dir, "layouts.json"))
+    layoutmanager = LayoutManager(os.path.join(user_data_dir, "layouts.json"),
+                                  configmanager.get_config().get('code_profile', 'morsey'))
 
     # Create main window
     window = Window(layoutManager=layoutmanager, configManager=configmanager)

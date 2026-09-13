@@ -30,7 +30,7 @@ class TextStateTests(TestCase):
         with TemporaryDirectory() as directory:
             source = Path(directory) / 'layouts.json'
             source.write_text(original, encoding='utf-8')
-            manager = morse.LayoutManager(str(source))
+            manager = morse.LayoutManager(str(source), code_profile='legacy')
             self.assertEqual(manager.get_active_layout()['items'],
                              [{'action': 'A', 'code': '12', 'label': 'Custom key'}])
             self.assertEqual(source.read_text(encoding='utf-8'), original)

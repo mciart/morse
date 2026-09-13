@@ -14,8 +14,9 @@ import subprocess
 import sys
 import threading
 
-from PyQt5.QtCore import QCoreApplication, QObject, QThread, Qt, pyqtSignal
+from PyQt5.QtCore import QCoreApplication, QEvent, QObject, QThread, Qt, pyqtSignal
 from PyQt5.QtGui import QGuiApplication, QKeySequence
+from PyQt5.QtWidgets import QMenu
 
 
 DEFAULT_GLOBAL_HOTKEY = 'Ctrl+Alt+Shift+M'
@@ -29,6 +30,108 @@ MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
 HOTKEY_ID = 0x4D57
+WM_MOUSEACTIVATE = 0x0021
+MA_NOACTIVATE = 3
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_APPWINDOW = 0x00040000
+
+
+def guide_mouse_activation_event(event_type, message):
+    """Decline native mouse activation without discarding the mouse press.
+
+    Delegate from the guide/menu's nativeEvent only. In particular, this does
+    not intercept messages belonging to any other application or its windows.
+    """
+    if bytes(event_type) not in (b'windows_generic_MSG', b'windows_dispatcher_MSG'):
+        return None
+    if not message:
+        return None
+    native_message = wintypes.MSG.from_address(int(message))
+    if native_message.message == WM_MOUSEACTIVATE:
+        return True, MA_NOACTIVATE
+    return None
+
+
+def protect_guide_window(window, *, keep_taskbar=True, user32=None, platform_name=None):
+    """Protect an existing guide HWND against click/hover activation.
+
+    Reapply after Show/WinIdChange: switching a Qt frame creates a fresh HWND.
+    Never force native-window creation during those events, or keep a stale ID.
+    WS_EX_APPWINDOW keeps the guide's normal taskbar/minimize entry; menus call
+    this with keep_taskbar=False. All unrelated extended-style bits survive.
+    """
+    if ((platform_name or platform.system()) != 'Windows'
+            or window.testAttribute(Qt.WA_DontShowOnScreen)
+            or not window.testAttribute(Qt.WA_WState_Created)
+            or (user32 is None and QGuiApplication.platformName() != 'windows')):
+        return True
+    hwnd = int(window.effectiveWinId() or 0)
+    # effectiveWinId may temporarily return an ancestor's handle while a
+    # popup is being detached/destroyed. Never apply menu styles to its guide.
+    if not hwnd or window.find(hwnd) is not window:
+        return True
+    if user32 is None:
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+    pointer_sized = ctypes.sizeof(ctypes.c_void_p) == 8
+    get_style = user32.GetWindowLongPtrW if pointer_sized else user32.GetWindowLongW
+    set_style = user32.SetWindowLongPtrW if pointer_sized else user32.SetWindowLongW
+    get_style.argtypes, get_style.restype = [wintypes.HWND, ctypes.c_int], ctypes.c_ssize_t
+    set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    set_style.restype = ctypes.c_ssize_t
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.SetWindowPos.restype = wintypes.BOOL
+    ctypes.set_last_error(0)
+    old_style = get_style(hwnd, -20)  # GWL_EXSTYLE
+    if not old_style and ctypes.get_last_error():
+        logging.warning('无法读取码表窗口样式（Windows 错误 %s）。', ctypes.get_last_error())
+        return False
+    new_style = old_style | WS_EX_NOACTIVATE
+    new_style = (new_style | WS_EX_APPWINDOW) if keep_taskbar else (new_style & ~WS_EX_APPWINDOW)
+    if new_style == old_style:
+        return True
+    ctypes.set_last_error(0)
+    if not set_style(hwnd, -20, new_style) and ctypes.get_last_error():
+        logging.warning('无法保护码表鼠标焦点（Windows 错误 %s）。', ctypes.get_last_error())
+        return False
+    # Refresh cached styles, preserving visibility, geometry, z-order and focus.
+    if not user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0237):
+        # NOSIZE | NOMOVE | NOZORDER | NOACTIVATE | FRAMECHANGED | NOOWNERZORDER.
+        logging.warning('无法更新码表窗口样式（Windows 错误 %s）。', ctypes.get_last_error())
+        return False
+    return True
+
+
+class NonActivatingMenu(QMenu):
+    """Mouse-operated guide menu; no input focus is taken from the foreground."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Show, QEvent.WinIdChange):
+            protect_guide_window(self, keep_taskbar=False)
+        return result
+
+    def nativeEvent(self, event_type, message):
+        result = guide_mouse_activation_event(event_type, message)
+        return result if result is not None else super().nativeEvent(event_type, message)
+
+    def addMenu(self, *args):
+        # QMenu.addMenu(title/icon,title) otherwise creates an ordinary popup
+        # whose mouse activation would escape the parent menu's protection.
+        if len(args) == 1 and isinstance(args[0], QMenu):
+            return super().addMenu(*args)
+        title = args[-1]
+        submenu = NonActivatingMenu(title, self)
+        if len(args) == 2:
+            submenu.setIcon(args[0])
+        super().addMenu(submenu)
+        return submenu
 
 
 def show_guide_without_activation(window, *, keep_minimized=False,

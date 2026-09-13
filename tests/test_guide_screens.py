@@ -25,6 +25,9 @@ class ScreenStub(QObject):
     def availableGeometry(self):
         return QRect(self._bounds)
 
+    def name(self):
+        return 'Test screen'
+
     def geometry(self):
         return QRect(self._bounds)
 

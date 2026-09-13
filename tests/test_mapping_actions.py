@@ -59,7 +59,7 @@ class MappingActionTests(unittest.TestCase):
         config_path = Path(temporary) / "config.json"
         config_path.write_text(json.dumps(dict(
             morse.DEFAULT_CONFIG, keylen=3, withsound=False, guide_layout='main',
-            minLetterPause=60000, fastMorseMode=False,
+            minLetterPause=60000, fastMorseMode=False, code_profile='legacy',
         )), encoding="utf-8")
 
         self.start_listener = self.enterContext(patch.object(morse.KeyListenerThread, "start"))

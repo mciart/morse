@@ -40,6 +40,10 @@ def windows_api():
         ('GetDpiForWindow', [wintypes.HWND], wintypes.UINT),
         ('GetThreadDpiAwarenessContext', [], wintypes.HANDLE),
         ('GetAwarenessFromDpiAwarenessContext', [wintypes.HANDLE], ctypes.c_int),
+        ('GetForegroundWindow', [], wintypes.HWND),
+        ('SetForegroundWindow', [wintypes.HWND], wintypes.BOOL),
+        ('GetWindowLongPtrW', [wintypes.HWND, ctypes.c_int], ctypes.c_ssize_t),
+        ('SendMessageW', [wintypes.HWND, wintypes.UINT, ctypes.c_size_t, ctypes.c_ssize_t], ctypes.c_ssize_t),
     )
     for name, arguments, result in signatures:
         function = getattr(api, name)
@@ -66,6 +70,7 @@ def check_native(report, save_images=False):
     from PyQt5.QtTest import QTest
     from PyQt5.QtWidgets import QApplication, QWidget
     from tools.generate_codechart import read_key_data
+    from morse_profiles import apply_code_profile
     from ui_theme import ThemeManager
     from virtual_keyboard import VirtualKeyboardView
     from windows_integration import show_guide_without_activation
@@ -75,9 +80,54 @@ def check_native(report, save_images=False):
         lambda kind, context, text: warnings.append(text)
         if kind in (QtWarningMsg, QtCriticalMsg, QtFatalMsg) else None)
     app = backdrop = view = None
+    foreground_baseline = None
     result = dict(status='failed', skipped=False, baseline_established=False,
                   stages=stages, qt_warnings=warnings,
                   display_change_test='simulated font metrics and Qt screen signals; real desktop pixel sampling')
+
+    def assert_mouse_activation_guard(widget, *, taskbar):
+        # Messages go only to HWNDs owned by this test process. This exercises
+        # the real Windows message dispatch without moving/injecting the mouse.
+        hwnd = int(widget.effectiveWinId())
+        owner = wintypes.DWORD()
+        api.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        assert owner.value == os.getpid(), 'Refusing a message to an unowned HWND'
+        style = api.GetWindowLongPtrW(hwnd, -20)
+        assert style & 0x08000000, 'Guide accepts native mouse activation'
+        assert bool(style & 0x00040000) == taskbar, 'Taskbar style changed'
+        for button in (0x0201, 0x0204):  # left/right; HTCLIENT=1
+            assert api.SendMessageW(hwnd, 0x0021, hwnd, (button << 16) | 1) == 3, 'Mouse activation not declined'
+        if foreground_baseline:
+            assert api.GetForegroundWindow() == foreground_baseline, 'Guide interaction took foreground'
+
+    def check_menus():
+        menu = view.createViewMenu()
+        submenu = next((action.menu() for action in menu.actions() if action.menu()), None)
+        try:
+            menu.popup(view.mapToGlobal(QPoint(20, 20)))
+            flush()
+            assert_mouse_activation_guard(menu, taskbar=False)
+            assert submenu is not None, 'Missing compact size submenu'
+            submenu.popup(menu.mapToGlobal(QPoint(menu.width() + 2, 0)))
+            flush()
+            assert_mouse_activation_guard(submenu, taskbar=False)
+            submenu.hide()
+            action = next(action for action in menu.actions() if action.text() == '显示鼠标')
+            previous = view._mouse_visible
+            QTest.mouseClick(menu, Qt.LeftButton, pos=menu.actionGeometry(action).center())
+            flush()
+            assert view._mouse_visible != previous and not menu.isVisible(), 'Menu action lost mouse input'
+            assert view.createViewMenu() is menu, 'Guide created another popup instead of reusing its owned menu'
+            assert_mouse_activation_guard(view, taskbar=True)
+            view.setMouseVisible(previous)
+            flush()
+        finally:
+            if submenu is not None:
+                submenu.hide()
+            menu.hide()
+            # The guide owns one persistent popup: destroying a popup attached
+            # to Qt 5's layered guide invalidates its subsequent native paint.
+        result['menu_mouse_activation_test'] = 'passed'
 
     def flush():
         loop = QEventLoop()
@@ -109,6 +159,11 @@ def check_native(report, save_images=False):
         own_region()
         return origin, pixmap, pixmap.toImage()
 
+    def native_position():
+        bounds = wintypes.RECT()
+        assert api.GetWindowRect(int(view.effectiveWinId()), ctypes.byref(bounds)), 'Cannot read guide native bounds'
+        return bounds.left, bounds.top
+
     def sample(name, visible=True, minimized=False):
         flush()
         assert not warnings, 'Qt warnings: ' + '; '.join(warnings)
@@ -116,6 +171,7 @@ def check_native(report, save_images=False):
         hwnd = int(view.effectiveWinId() or 0)
         if visible:
             assert hwnd and api.IsWindowVisible(hwnd) and bool(api.IsIconic(hwnd)) == minimized, name
+            assert_mouse_activation_guard(view, taskbar=True)
         origin, pixmap, image = capture()
         assert not image.isNull(), 'Desktop capture unavailable'
         ratio_x, ratio_y = image.width() / backdrop.width(), image.height() / backdrop.height()
@@ -140,7 +196,8 @@ def check_native(report, save_images=False):
                        for y in range(4, image.height(), 16)
                        for x in range(4, image.width(), 16)), 'Hidden guide still appears'
         stages.append(dict(name=name, visible_keys=sum(samples), sampled_keys=len(samples),
-                           width=view.width(), height=view.height(), visible=visible, minimized=minimized))
+                           width=view.width(), height=view.height(), visible=visible, minimized=minimized,
+                           native_position=native_position() if visible and not minimized else None))
         if save_images:
             directory = report.parent / (report.stem + '-images')
             directory.mkdir(parents=True, exist_ok=True)
@@ -212,7 +269,20 @@ def check_native(report, save_images=False):
                 for y in range(4, baseline.height(), 16) for x in range(4, baseline.width(), 16)):
             raise NativeDesktopUnavailable('Solid backdrop could not be sampled; guide test not executed')
         result['baseline_established'] = True
-        layout = json.loads((ROOT / 'user_data/layouts.json').read_text(encoding='utf-8-sig'))['layouts']['desktop']
+        # Establish focus only on our independent backdrop. Windows may deny
+        # foreground permission to a background CI/agent process; report that
+        # limitation rather than targeting another application or faking input.
+        backdrop.activateWindow()
+        api.SetForegroundWindow(int(backdrop.winId()))
+        flush()
+        if api.GetForegroundWindow() == int(backdrop.winId()):
+            foreground_baseline = int(backdrop.winId())
+            result['owned_foreground_test'] = dict(status='running')
+        else:
+            result['owned_foreground_test'] = dict(status='unavailable',
+                reason='Windows did not grant foreground to the owned test backdrop')
+        layouts = json.loads((ROOT / 'user_data/layouts.json').read_text(encoding='utf-8-sig'))['layouts']
+        layout = apply_code_profile(layouts, 'morsey')['desktop']
         labels = read_key_data(ROOT / 'MorseCodeGUI.py')
         for item in layout['items']:
             item['label'] = item.get('label', labels.get(item['action'], {}).get('label', item['action']))
@@ -222,6 +292,7 @@ def check_native(report, save_images=False):
         show_guide_without_activation(view)
         sample('full')
         original_size = view.size()
+        saved_positions = {False: native_position()}
         key = next(iter(view.crs.values()))
         result['display_environment'] = dict(
             automatic_high_dpi_scaling=app.testAttribute(Qt.AA_EnableHighDpiScaling),
@@ -237,6 +308,8 @@ def check_native(report, save_images=False):
         QTest.mouseClick(view.compact_checkbox, Qt.LeftButton)
         assert view.isCompactMode()
         sample('top-checkbox-compact')
+        saved_positions[True] = native_position()
+        check_menus()
         maximum = min(1.15, (backdrop.width() - 150) / view.scroll_area.sceneRect().width(),
                       (backdrop.height() - 150) / view.scroll_area.sceneRect().height())
         minimum = max(view._minimumCompactScale(), maximum * .8)
@@ -259,12 +332,22 @@ def check_native(report, save_images=False):
         drag(view.scroll_area.viewport().rect().center(), QPoint(16, 12))
         assert view.pos() != old_position and view.size() == old_size
         sample('drag-move')
+        # Deliberate resizing/moving establishes the compact mode's latest
+        # position; returning to full mode must retain its separate position.
+        saved_positions[True] = native_position()
         for index, compact in enumerate((False, True, False)):
             view.setCompactMode(compact)
             assert not sip.isdeleted(key)
             if not compact:
                 assert view.size() == original_size
+            else:
+                check_menus()  # Reuse after resizing and recreating native HWNDs.
             sample('mode-' + str(index))
+            actual_position = native_position()
+            assert actual_position == saved_positions[compact], (
+                f'Mode {"compact" if compact else "full"} native position changed: '
+                f'expected {saved_positions[compact]}, actual {actual_position}')
+            stages[-1]['position_restored'] = True
         view.hide()
         view.setCompactMode(True)
         sample('hidden-mode-change', visible=False)
@@ -314,6 +397,9 @@ def check_native(report, save_images=False):
         sample('simulated-dpi-hidden-restored')
         stages[-1].update(simulated_display_change=True, labels_fitting=assert_text_and_board_fit())
         assert view.compactScale() == requested_scale
+        if foreground_baseline:
+            result['owned_foreground_test'] = dict(status='passed',
+                tested='show, click, drag, resize, menus and recreated HWNDs; no global input')
         result['status'] = 'passed'
     except NativeDesktopUnavailable as error:
         result.update(status='unavailable', skipped=True, reason=str(error))

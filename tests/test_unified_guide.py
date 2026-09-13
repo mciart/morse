@@ -322,7 +322,7 @@ class UnifiedGuideTests(TestCase):
         menu = view.createViewMenu()
         self.assertEqual(menu.actions()[0].text(), '完整显示')
         menu.actions()[0].trigger()
-        menu.deleteLater()
+        menu.hide()
         self.app.processEvents()
         self.assertEqual(changes, [True, False])
         self.assertFalse(view.isCompactMode())
@@ -565,6 +565,26 @@ class UnifiedGuideTests(TestCase):
             self.assertTrue(QRect(0, 0, 2000, 1400).contains(view.geometry()))
             self.assert_compact_board_fits(view)
 
+    def test_reopened_menu_tracks_current_mode_and_mouse_without_accumulating_connections(self):
+        view = self.window.codeslayoutview
+        changes = []
+        view.compactModeChanged.connect(changes.append)
+        menu = view.createViewMenu()
+        for target in (True, False, True, False):
+            reopened = view.createViewMenu()
+            self.assertIs(reopened, menu)
+            self.assertEqual(reopened.actions()[0].text(), '精简显示' if target else '完整显示')
+            reopened.actions()[0].trigger()
+            self.app.processEvents()
+            self.assertEqual(view.isCompactMode(), target)
+        self.assertEqual(changes, [True, False, True, False])
+        view.setMouseVisible(True)
+        mouse_action = next(action for action in view.createViewMenu().actions() if action.text() == '显示鼠标')
+        self.assertTrue(mouse_action.isChecked())
+        mouse_action.trigger()
+        self.assertFalse(view._mouse_visible)
+        self.assertFalse(view.createViewMenu().actions()[2].isChecked())
+
     def test_compact_zoom_menu_controls_size_and_full_mode_restores_original_geometry(self):
         view = self.window.codeslayoutview
         view.setGeometry(30, 40, 720, 460)
@@ -591,7 +611,7 @@ class UnifiedGuideTests(TestCase):
             self.assertEqual(view.compactScale(), 1.0)
             self.assertEqual(view.size(), original_size)
             self.assert_compact_board_fits(view)
-            menu.deleteLater()
+            menu.hide()
         view.setCompactMode(False)
         self.app.processEvents()
         self.assertEqual(view.geometry(), full_geometry)

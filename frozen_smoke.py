@@ -127,7 +127,11 @@ def verify_installation(window, report_path):
             window._start_hidden = True
             window.init()
             view = window.codeslayoutview
-            assert len(view.crs) == 129, 'Missing guide actions'
+            assert len(view.crs) == 130, 'Missing guide actions'
+            assert window.config['code_profile'] == 'morsey', 'Fresh installs must use international-first codes'
+            for code, action in (('21121', 'FSLASH'), ('1112112', 'DOLLAR'),
+                                 ('1111111', 'BACKTICK'), ('1221121', 'DELETE')):
+                assert view.crs[code].item['action'] == action, 'Guide profile does not match dispatch'
             assert window.listenerThread is None, 'Smoke check must not install input hooks'
             assert not window._desktop_integration_started
             assert not view.isVisible() and not window.isVisible()

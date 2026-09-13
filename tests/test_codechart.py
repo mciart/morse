@@ -26,6 +26,21 @@ class CodeChartTests(unittest.TestCase):
             self.assertIn(f"## {page}\n", expected)
         self.assertNotIn("候选", expected)
         self.assertIn("本页共 129 项", expected)
+        self.assertIn("本页共 130 项", expected)
+        self.assertIn("## 统一面板：旧版专用", expected)
+        self.assertIn("dc120423abd6f211548ad5f60eba2f496fa680bf", expected)
+
+    def test_standard_and_legacy_sections_use_their_actual_distinct_codes(self):
+        chart = render_chart(self.layouts, self.key_data)
+        standard, rest = chart.split('## 统一面板：旧版专用', 1)
+        legacy = rest.split('## ', 1)[0]
+        self.assertIn('| / | `—••—•` |', standard)
+        self.assertIn('| 删除 | `•——••—•` |', standard)
+        self.assertIn('| $ | `•••—••—` |', standard)
+        self.assertIn('| \\` | `•••••••` |', standard)
+        self.assertIn('| / | `——••—` |', legacy)
+        self.assertIn('| 删除 | `—••—•` |', legacy)
+        self.assertIn('| $ | `—•••—•` |', legacy)
 
     def test_layout_specific_codes_and_source_labels_are_preserved(self):
         layouts = deepcopy(self.layouts)

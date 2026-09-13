@@ -82,6 +82,46 @@ class WindowBehaviorTests(unittest.TestCase):
             "endCharacterTimer", "fast_morse_mode_timer", "repeat_character_timer",
         )]
 
+    def test_default_international_guide_and_saved_legacy_selection_agree_with_dispatch(self):
+        self.assertEqual(self.window.codeProfileComboBox.currentText(), '国际摩斯优先')
+        view, _ = self.start_input()
+        self.assertEqual(len(view.crs), 130)
+        for code, action in (('21121', 'FSLASH'), ('1112112', 'DOLLAR'),
+                             ('1111111', 'BACKTICK'), ('1221121', 'DELETE')):
+            self.assertEqual(view.crs[code].item['action'], action)
+            self.assertIs(view.crs[code].item['_action'], next(
+                item['_action'] for item in self.window.layoutManager.get_active_layout()['items']
+                if item['code'] == code))
+        backtick = view.keystroke_crs_map['BACKTICK']
+        self.assertEqual(backtick.character.text(), '`')
+        self.assertLess(backtick.x(), view.keystroke_crs_map['ONE'].x())
+        self.window.backToSettings()
+        selector = self.window.codeProfileComboBox
+        selector.setCurrentIndex(selector.findData('legacy'))
+        self.window.saveSettings()
+        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
+        self.assertEqual(saved['code_profile'], 'legacy')
+        self.window.GOButton.click()
+        self.app.processEvents()
+        view = self.window.codeslayoutview
+        self.views.append(view)
+        self.assertEqual(len(view.crs), 129)
+        self.assertEqual(view.crs['21121'].item['action'], 'DELETE')
+        self.assertNotIn('BACKTICK', view.keystroke_crs_map)
+
+    def test_conflicting_custom_profile_falls_back_with_visible_explanation(self):
+        layout = self.window.layoutManager
+        layout.set_code_profile('legacy')
+        layout._raw_layouts['desktop']['items'].append({'action': 'F13', 'code': '1221121'})
+        with patch.object(morse.QMessageBox, 'warning') as warning:
+            view, _ = self.start_input()
+        warning.assert_called_once()
+        self.assertIn('重复编码', warning.call_args.args[2])
+        self.assertEqual(self.window.codeProfileComboBox.currentData(), 'legacy')
+        self.assertEqual(layout.code_profile, 'legacy')
+        self.assertEqual(self.window.config['code_profile'], 'legacy')
+        self.assertEqual(view.crs['21121'].item['action'], 'DELETE')
+
     def test_settings_close_hides_to_tray_and_restores_without_stopping(self):
         with patch.object(self.window, "stopIt", wraps=self.window.stopIt) as stop:
             self.assertFalse(self.window.close())
