@@ -152,11 +152,70 @@ class ImeIntegrationTests(pinyin.PinyinIntegrationTests):
     def test_failed_sync_discards_buffer_without_sending_wrong_mode_text(self):
         self.window.processGuideKey(True, self.now)
         self.code('222')
-        self.complete_request(False, ok=False)
+        with patch.object(self.view, 'showMessage', wraps=self.view.showMessage) as message:
+            self.complete_request(False, ok=False)
+            self.assertIn('本次电码未发送', message.call_args.args[0])
         self.assertEqual(self.backend.mock_calls, [])
         self.assertEqual(self.window._ime_pending_codes, [])
         self.assertFalse(self.view.isPinyinMode())
         self.assertIn('同步失败', self.window.imeSyncStatus.text())
+
+    def test_toggle_exit_rejected_with_pending_ime_candidates_restores_state_without_retry(self):
+        # The native adapter reports that candidate composition prevented a
+        # confirmed switch. There is no unfinished Morse character here.
+        self.window.layer_gesture = HoldTapGesture(mode='toggle')
+        self.window.engine = pinyin.MorseEngine(dict(keylen=2, keyer_mode='manual', minLetterPause=0))
+        self.external(True)
+        listener = self.window.listenerThread
+        with patch.object(self.window.guide_key, 'snapshot_events', return_value=(
+                self.now + .4, [(True, self.now), (False, self.now + .04)])), \
+             patch.object(listener, 'snapshot_events', return_value=(self.now + .4, [])):
+            self.window.drainInput()
+        self.assertFalse(self.view.isPinyinMode())
+        self.assertIsNone(self.window._sequence_pinyin)
+        self.assertEqual(self.window._ime_pending_codes, [])
+        self.service.request.assert_called_once_with(False, self.service.latest)
+        with self.assertLogs(level='WARNING') as logs, \
+             patch.object(self.view, 'showMessage', wraps=self.view.showMessage) as message:
+            self.window.imeRequestFinished(self.window._ime_request,
+                ImeSetResult(False, self.service.latest, 'mode_not_confirmed'))
+        self.assertTrue(self.view.isPinyinMode())
+        self.assertTrue(self.window.layer_gesture.layer_active)
+        self.assertIsNone(self.window._ime_request)
+        self.assertIn('切换尚未确认', self.window.imeSyncStatus.text())
+        self.assertNotIn('未发送', message.call_args.args[0])
+        self.assertIn('reason=mode_not_confirmed', logs.output[0])
+        self.assertIn('same_target=True', logs.output[0])
+        self.assertIn('queued_codes=0', logs.output[0])
+        self.window.processGestureEvents(self.window.layer_gesture.tick(self.now + 1))
+        self.assertEqual(self.service.request.call_count, 1)
+        # After the rejected exit, a double tap still only hides the guide.
+        visible = self.view.isVisible()
+        with patch.object(self.window.guide_key, 'snapshot_events', return_value=(self.now + 2.3,
+                [(True, self.now + 2), (False, self.now + 2.04),
+                 (True, self.now + 2.1), (False, self.now + 2.14)])), \
+             patch.object(listener, 'snapshot_events', return_value=(self.now + 2.3, [])):
+            self.window.drainInput()
+        self.assertNotEqual(self.view.isVisible(), visible)
+        self.assertTrue(self.window.layer_gesture.layer_active)
+        self.assertEqual(self.service.request.call_count, 1)
+        self.assertEqual(self.backend.mock_calls, [])
+
+    def test_sync_failure_feedback_distinguishes_target_permission_and_timeout(self):
+        for reason, same_target, expected in (
+                ('target_changed', False, '输入窗口已改变'),
+                ('access_denied', True, '权限一致'),
+                ('ime_timeout', True, '响应超时')):
+            with self.subTest(reason=reason):
+                self.service.target_matches.return_value = same_target
+                self.window._ime_request = 1
+                with self.assertLogs(level='WARNING') as logs, \
+                     patch.object(self.view, 'showMessage', wraps=self.view.showMessage) as message:
+                    self.window.imeRequestFinished(1, ImeSetResult(False, self.state, reason))
+                self.assertIn(expected, self.window.imeSyncStatus.text())
+                self.assertNotIn('未发送', message.call_args.args[0])
+                self.assertIn('reason=' + reason, logs.output[0])
+                self.assertIn('same_target=' + str(same_target), logs.output[0])
 
     def test_focus_change_before_readback_does_not_send_buffer_to_new_window(self):
         self.window.processGuideKey(True, self.now)

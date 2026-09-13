@@ -186,7 +186,58 @@ class NativeImeBackendTests(unittest.TestCase):
         self.assertEqual(self.api.writes, [(105, IMC_SETCONVERSIONMODE, 0x409, 60)])
         result = self.backend.set_chinese(result.state, False)
         self.assertTrue(result.ok)
-        self.assertEqual(self.api.conversion, 0x408)
+        self.assertEqual(self.api.conversion, 0x409)
+        self.assertFalse(self.api.opened)
+        self.assertEqual(self.api.writes[-1], (105, IMC_SETOPENSTATUS, 0, 60))
+
+    def test_exit_closes_composition_instead_of_changing_conversion_under_it(self):
+        self.api.conversion = 0x401
+        composition = ['nihao']
+        committed = []
+        control = self.api.control
+
+        def candidate_control(hwnd, command, value, timeout):
+            # Model the rejected conversion write reported with open candidates.
+            if command == IMC_SETCONVERSIONMODE and composition:
+                self.api.calls.append((hwnd, command, value, timeout))
+                return 0
+            result = control(hwnd, command, value, timeout)
+            if command == IMC_SETOPENSTATUS and not value and composition:
+                committed.append(composition.pop())
+            return result
+
+        self.api.control = candidate_control
+        result = self.backend.set_chinese(self.backend.snapshot(), False)
+        self.assertTrue(result.ok)
+        self.assertFalse(result.state.chinese)
+        self.assertEqual(committed, ['nihao'])
+        self.assertEqual(composition, [])
+        self.assertEqual(self.api.writes, [(105, IMC_SETOPENSTATUS, 0, 60)])
+
+    def test_english_exit_accepts_pinyin_normalizing_open_state(self):
+        self.api.conversion = 0x401
+        def normalize():
+            self.api.opened, self.api.conversion = 1, 0
+        self.api.after_write = normalize
+        result = self.backend.set_chinese(self.backend.snapshot(), False)
+        self.assertTrue(result.ok)
+        self.assertTrue(result.state.open_status)
+        self.assertFalse(result.state.chinese)
+
+    def test_ignored_english_exit_is_not_reported_as_success(self):
+        self.api.conversion, self.api.ignore_write = 1, True
+        result = self.backend.set_chinese(self.backend.snapshot(), False)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, 'mode_not_confirmed')
+        self.assertEqual(self.api.writes, [(105, IMC_SETOPENSTATUS, 0, 60)])
+
+    def test_target_change_during_english_exit_never_reports_success(self):
+        self.api.conversion = 1
+        self.api.after_write = lambda: setattr(self.api, 'current', replace(TARGET, focus=999))
+        result = self.backend.set_chinese(self.backend.snapshot(), False)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.reason, 'target_changed')
+        self.assertEqual(self.api.writes, [(105, IMC_SETOPENSTATUS, 0, 60)])
 
     def test_already_correct_mode_does_not_write(self):
         result = self.backend.set_chinese(self.backend.snapshot(), False)

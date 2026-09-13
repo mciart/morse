@@ -204,20 +204,28 @@ class NativeImeBackend:
         if current.chinese == chinese:
             return ImeSetResult(True, current)
         try:
-            if chinese and not current.open_status:
-                result = self._set(current, IMC_SETOPENSTATUS, 1)
+            if not chinese:
+                # Closing Microsoft Pinyin's input context also finalizes an
+                # active composition as its original spelling. Merely clearing
+                # NATIVE can leave candidates active or be rejected while they
+                # are open. Do not synthesize Enter/Space/Shift in the target.
+                result = self._set(current, IMC_SETOPENSTATUS, 0)
                 if result:
-                    return ImeSetResult(False, self.snapshot(), 'set_open_rejected')
-                current = self.snapshot()
-                if (current.target_key != state.target_key or current.is_pinyin is not True
-                        or current.chinese is None or not current.open_status):
-                    return ImeSetResult(False, current, current.reason or 'open_not_confirmed')
-            conversion = (current.conversion | IME_CMODE_NATIVE) if chinese else (
-                current.conversion & ~IME_CMODE_NATIVE)
-            if conversion != current.conversion:
-                result = self._set(current, IMC_SETCONVERSIONMODE, conversion)
-                if result:
-                    return ImeSetResult(False, self.snapshot(), 'set_conversion_rejected')
+                    return ImeSetResult(False, self.snapshot(), 'set_close_rejected')
+            else:
+                if not current.open_status:
+                    result = self._set(current, IMC_SETOPENSTATUS, 1)
+                    if result:
+                        return ImeSetResult(False, self.snapshot(), 'set_open_rejected')
+                    current = self.snapshot()
+                    if (current.target_key != state.target_key or current.is_pinyin is not True
+                            or current.chinese is None or not current.open_status):
+                        return ImeSetResult(False, current, current.reason or 'open_not_confirmed')
+                conversion = current.conversion | IME_CMODE_NATIVE
+                if conversion != current.conversion:
+                    result = self._set(current, IMC_SETCONVERSIONMODE, conversion)
+                    if result:
+                        return ImeSetResult(False, self.snapshot(), 'set_conversion_rejected')
             confirmed = self.snapshot()
             if confirmed.target_key != state.target_key:
                 return ImeSetResult(False, confirmed, 'target_changed')

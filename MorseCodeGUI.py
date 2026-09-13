@@ -1044,15 +1044,32 @@ class Window(QDialog):
         self._ime_request = None
         state = result.state
         if not result.ok or not self.ime_sync.target_matches(state):
+            same_target = bool(state is not None and self.ime_sync.target_matches(state))
+            queued_count = len(self._ime_pending_codes)
+            reason = result.reason or (state.reason if state is not None else '') or 'unknown'
+            logging.warning(
+                'IME synchronization failed: serial=%s reason=%s same_target=%s '
+                'observed_chinese=%s queued_codes=%s',
+                serial, reason, same_target, state.chinese if state is not None else None, queued_count)
             self._ime_pending_codes = []
             self._ime_deferred_layer = None
-            actual = bool(state is not None and self.ime_sync.target_matches(state)
-                          and state.is_pinyin is True and state.chinese)
+            actual = bool(same_target and state.is_pinyin is True and state.chinese)
             self.layer_gesture.sync_layer(actual)
             self.setPinyinLayer(actual, sync_ime=False)
-            self.imeSyncStatus.setText('同步失败：请确认当前窗口使用微软拼音，且权限一致。')
+            if reason == 'target_changed' or (state is not None and not same_target):
+                message = '同步失败：输入窗口已改变，请回到原输入窗口后重试。'
+            elif reason == 'mode_not_confirmed':
+                message = '同步失败：当前输入未结束或中英文切换尚未确认。'
+            elif reason == 'access_denied':
+                message = '同步失败：无法访问输入窗口，请确认程序与目标窗口权限一致。'
+            elif reason == 'ime_timeout':
+                message = '同步失败：输入法响应超时，请稍后重试。'
+            else:
+                message = '同步失败：输入法未接受切换，请确认当前窗口使用微软拼音。'
+            self.imeSyncStatus.setText(message)
             if self.codeslayoutview is not None:
-                self.codeslayoutview.showMessage('输入法同步失败，本次电码未发送', False)
+                self.codeslayoutview.showMessage(
+                    message + (' 本次电码未发送。' if queued_count else ''), False)
             return
         while self._ime_pending_codes:
             character, layer = self._ime_pending_codes[0]
