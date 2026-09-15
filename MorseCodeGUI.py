@@ -63,6 +63,7 @@ DEFAULT_CONFIG = {
   "fontsizescale": 100,
   "upperchars": True,
   "autostart": False,
+  "start_in_tray": False,
   "guide_hotkey": DEFAULT_GLOBAL_HOTKEY,
   "pinyin_layer_enabled": True,
   "pinyin_layer_key": "F22",
@@ -495,6 +496,7 @@ class Window(QDialog):
 
         self._shutting_down = False
         self._last_save_error = None
+        self._settings_ready = False
         self._start_hidden = False
         self._desktop_integration_started = False
         self.startup_registration = StartupRegistration()
@@ -567,7 +569,6 @@ class Window(QDialog):
         self.createTrayIcon()
         self.trayIcon.activated.connect(self.iconActivated)
         self.GOButton.clicked.connect(self.goForIt)
-        self.SaveButton.clicked.connect(self.saveSettings)
         self.DeviceButton.clicked.connect(self.changeAudioDevice)
         self.withSound.clicked.connect(self.updateAudioProperties)
         mainLayout = QVBoxLayout()
@@ -583,7 +584,7 @@ class Window(QDialog):
         self.settings_actions = QWidget()
         buttons = ResponsiveSettingsRow(self.settings_actions)
         buttons.setContentsMargins(0, 0, 0, 0)
-        for button in (self.DeviceButton, self.SaveButton, self.GOButton):
+        for button in (self.DeviceButton, self.GOButton):
             buttons.addWidget(button)
         mainLayout.addWidget(self.settings_actions)
         self.setLayout(mainLayout)
@@ -594,6 +595,8 @@ class Window(QDialog):
         self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.settings_sizer = SettingsWindowSizer(
             self, self.settings_scroll, self.settings_actions)
+        self._bindSettingsPersistence()
+        self._settings_ready = True
 
 
     def get_configured_keys(self):
@@ -643,6 +646,7 @@ class Window(QDialog):
     def updateAudioProperties(self):
         self.config['withsound'] = self.withSound.isChecked()
         self.configureAudio()
+        self.saveSettings()
 
     def configureAudio(self):
         self.audio.configure(frequency=self.config.get('tone_frequency', 600),
@@ -656,11 +660,11 @@ class Window(QDialog):
         self.config['tone_volume'] = self.toneVolumeEdit.value()
         self.config['confirmation_sound'] = self.confirmationSoundCheck.isChecked()
         self.configureAudio()
+        self.saveSettings()
 
     def saveAudioDevice(self, name):
         self.config['audio_device'] = name
-        self.configManager.config['audio_device'] = name
-        self.saveConfig(self.configManager.config)
+        self.saveSettings()
 
     def audioError(self, message):
         logging.error('Audio output: %s', message)
@@ -701,27 +705,20 @@ class Window(QDialog):
             self.updateOutputState()
 
     def changeTheme(self):
-        mode = self.themeComboBox.currentData()
-        self.config['theme'] = mode
-        self.configManager.config['theme'] = mode
-        QApplication.instance().theme_manager.set_mode(mode)
-        self.saveConfig(self.configManager.config)
+        QApplication.instance().theme_manager.set_mode(self.themeComboBox.currentData())
+        self.saveSettings()
 
     def changeMouseVisibility(self, visible):
-        self.config['show_mouse'] = bool(visible)
-        self.configManager.config['show_mouse'] = bool(visible)
         self.showMouseCheckBox.setChecked(bool(visible))
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setMouseVisible(bool(visible))
-        self.saveConfig(self.configManager.config)
+        self.saveSettings()
 
     def changeGuideAutoFit(self, enabled):
-        self.config['guide_auto_fit'] = bool(enabled)
-        self.configManager.config['guide_auto_fit'] = bool(enabled)
         self.guideAutoFitCheckBox.setChecked(bool(enabled))
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setAutoFit(bool(enabled))
-        self.saveConfig(self.configManager.config)
+        self.saveSettings()
 
     def updateOutputState(self):
         if self.codeslayoutview is not None:
@@ -729,23 +726,20 @@ class Window(QDialog):
 
     def changeGuideCompact(self, enabled):
         enabled = bool(enabled)
-        self.config['guide_compact'] = enabled
-        self.configManager.config['guide_compact'] = enabled
         self.guideCompactCheckBox.setChecked(enabled)
         self.compactGuideAction.setChecked(enabled)
         if isinstance(self.codeslayoutview, VirtualKeyboardView):
             self.codeslayoutview.setCompactMode(enabled)
-        self.saveConfig(self.configManager.config)
+        self.config['guide_compact'] = enabled
+        self.saveSettings()
 
     def changeGuideCompactScale(self, scale):
         self.config['guide_compact_scale'] = float(scale)
-        self.configManager.config['guide_compact_scale'] = float(scale)
-        self.saveConfig(self.configManager.config)
+        self.saveSettings()
 
     def changeGuidePositions(self, positions):
         self.config['guide_positions'] = dict(positions)
-        self.configManager.config['guide_positions'] = dict(positions)
-        self.saveConfig(self.configManager.config)
+        self.saveSettings()
 
     def toggleSound(self):
         self.config['withsound'] = not self.config['withsound']
@@ -764,7 +758,7 @@ class Window(QDialog):
         # The file remains unchanged, but a later theme/position save must not
         # silently discard settings whose earlier write failed.
         self.configManager.config = dict(config)
-        message = '设置保存失败，原配置文件已保留。请检查磁盘空间或文件权限，然后重试保存。'
+        message = '设置保存失败，原配置文件已保留。请检查磁盘空间或文件权限后再试。'
         self.configSaveStatus.setText(message)
         self.configSaveStatus.show()
         error = self.configManager.last_save_error
@@ -779,7 +773,7 @@ class Window(QDialog):
                     self.codeslayoutview.showMessage(message, False)
         return False
 
-    def collect_config(self):
+    def collect_config(self, include_bindings=True):
         config = {
             **self.config,
             'theme': self.themeComboBox.currentData(),
@@ -801,13 +795,17 @@ class Window(QDialog):
             'off': False,
             'fontsizescale': self.fontSizeScaleEdit.value(),
             'autostart': self.autostartCheckbox.isChecked(),
-            'guide_hotkey': self.selectedGuideHotkey(),
-            'pinyin_layer_enabled': self.pinyinLayerCheck.isChecked(),
-            'pinyin_layer_key': self.selectedPinyinKey(),
-            'pinyin_layer_mode': self.selectedPinyinMode(),
-            'pinyin_ime_sync': self.imeSyncCheck.isChecked(),
+            'start_in_tray': self.startInTrayCheckbox.isChecked(),
             'fastMorseMode': self.fastMorseModeCheckbox.isChecked() if self.keySelectionRadioOneKey.isChecked() is False else False,
         }
+        if include_bindings:
+            config.update({
+                'guide_hotkey': self.selectedGuideHotkey(),
+                'pinyin_layer_enabled': self.pinyinLayerCheck.isChecked(),
+                'pinyin_layer_key': self.selectedPinyinKey(),
+                'pinyin_layer_mode': self.selectedPinyinMode(),
+                'pinyin_ime_sync': self.imeSyncCheck.isChecked(),
+            })
         return config
 
     def goForIt(self):
@@ -826,6 +824,7 @@ class Window(QDialog):
         except (ValueError, TypeError) as error:
             QMessageBox.warning(self, '设置无效', str(error) or '请检查输入及声音设置。')
             return
+        self.saveConfig(self.config)
         self.hide()
         self.init()
         if not self.listenerThread:
@@ -1217,11 +1216,11 @@ class Window(QDialog):
             QMessageBox.warning(self, '开机自启设置失败', str(error))
 
     def presentAtLaunch(self, startup=False):
-        self._start_hidden = bool(startup)
+        self._start_hidden = bool(startup) or bool(self.config.get('start_in_tray', False))
         try:
             if self.config.get('autostart', False):
                 self.start()
-            elif not startup:
+            elif not self._start_hidden:
                 self.show()
         finally:
             self._start_hidden = False
@@ -1253,6 +1252,57 @@ class Window(QDialog):
         self.keySelectionRadioThreeKey = QRadioButton("三键")
 
         inputSettingsLayout = QVBoxLayout()
+
+        startup_group = QGroupBox('启动与快捷键')
+        startup_layout = QVBoxLayout(startup_group)
+        self.startupCheckbox = QCheckBox('开机自启，并收进系统托盘')
+        self.startupCheckbox.setToolTip('登录 Windows 后自动运行，不弹出设置窗口。勾选后立即生效。')
+        self.startupCheckbox.setEnabled(self.startup_registration.supported)
+        try:
+            self.startupCheckbox.setChecked(self.startup_registration.is_enabled())
+        except (OSError, RuntimeError) as error:
+            logging.warning('Startup registration: %s', error)
+            self.startupCheckbox.setEnabled(False)
+            self.startupCheckbox.setToolTip(str(error))
+        self.startupCheckbox.clicked.connect(self.changeStartupRegistration)
+        startup_layout.addWidget(self.startupCheckbox)
+        startup_hint = QLabel('勾选后立即写入当前用户的开机启动项；取消勾选即关闭。')
+        startup_hint.setWordWrap(True)
+        startup_layout.addWidget(startup_hint)
+        self.startInTrayCheckbox = QCheckBox('启动后默认收进系统托盘')
+        self.startInTrayCheckbox.setToolTip('从桌面、开始菜单或任务栏打开时不弹出设置窗口，只保留托盘图标。登录自启始终收进托盘。')
+        self.startInTrayCheckbox.setChecked(self.config.get('start_in_tray', False))
+        startup_layout.addWidget(self.startInTrayCheckbox)
+        self.autostartCheckbox = QCheckBox('启动后自动开始输入')
+        self.autostartCheckbox.setChecked(self.config.get('autostart', False))
+        startup_layout.addWidget(self.autostartCheckbox)
+        self.hotkeyEnabledCheck = QCheckBox('额外的单击显隐快捷键')
+        self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
+        self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
+        startup_layout.addWidget(self.hotkeyEnabledCheck)
+        shortcut_row = ResponsiveSettingsRow()
+        self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey') or DEFAULT_GLOBAL_HOTKEY))
+        self.hotkeyEdit.setToolTip('按下新的组合键后点击“应用”；未开始输入时切换设置窗口。')
+        self.hotkeyPresetComboBox = QComboBox()
+        self.hotkeyPresetComboBox.addItem('默认组合键', DEFAULT_GLOBAL_HOTKEY)
+        for number in range(13, 25):
+            self.hotkeyPresetComboBox.addItem(f'F{number}', f'F{number}')
+        self.hotkeyPresetComboBox.addItem('自定义组合键…', None)
+        self.syncGuideHotkeyPreset()
+        self.hotkeyPresetComboBox.currentIndexChanged.connect(self.changeGuideHotkeyPreset)
+        self.hotkeyEdit.keySequenceChanged.connect(self.syncGuideHotkeyPreset)
+        self.hotkeyEnabledCheck.toggled.connect(self.updateGuideHotkeyControls)
+        shortcut_row.addWidget(self.hotkeyPresetComboBox, 1)
+        self.hotkeyApplyButton = QPushButton('应用')
+        self.hotkeyApplyButton.setEnabled(self.guide_hotkey.supported)
+        self.hotkeyApplyButton.clicked.connect(self.saveGuideHotkey)
+        shortcut_row.addWidget(self.hotkeyApplyButton)
+        startup_layout.addLayout(shortcut_row)
+        startup_layout.addWidget(self.hotkeyEdit)
+        self.hotkeyStatus = QLabel('可直接选择 F22，再点击“应用”；隐藏码表时输入继续运行。')
+        self.hotkeyStatus.setWordWrap(True)
+        startup_layout.addWidget(self.hotkeyStatus)
+        inputSettingsLayout.addWidget(startup_group)
 
         inputRadioGroup = QGroupBox("按键数量")
         inputRadioButtonsLayout = ResponsiveSettingsRow()
@@ -1461,58 +1511,14 @@ class Window(QDialog):
         self.imeSyncCheck.setEnabled(self.guide_key.supported)
         self.imeSyncCheck.setToolTip('切换中／英文时同步当前输入窗口；显隐码表不改变输入法。切回英文时，未选字内容保留为原拼音。')
         pinyin_layout.addWidget(self.imeSyncCheck)
-        self.imeSyncStatus = QLabel('同步默认关闭；开启后点击“应用”或“保存设置”。')
+        self.imeSyncStatus = QLabel('同步默认关闭；开启后点击“应用”，开始输入后生效。')
         self.imeSyncStatus.setWordWrap(True)
         pinyin_layout.addWidget(self.imeSyncStatus)
         inputSettingsLayout.addWidget(pinyin_group)
-
-        startup_group = QGroupBox('启动与快捷键')
-        startup_layout = QVBoxLayout(startup_group)
-        self.startupCheckbox = QCheckBox('开机自启，并收进系统托盘')
-        self.startupCheckbox.setEnabled(self.startup_registration.supported)
-        try:
-            self.startupCheckbox.setChecked(self.startup_registration.is_enabled())
-        except (OSError, RuntimeError) as error:
-            logging.warning('Startup registration: %s', error)
-            self.startupCheckbox.setEnabled(False)
-            self.startupCheckbox.setToolTip(str(error))
-        self.startupCheckbox.clicked.connect(self.changeStartupRegistration)
-        startup_layout.addWidget(self.startupCheckbox)
-        self.autostartCheckbox = QCheckBox('启动后自动开始输入')
-        self.autostartCheckbox.setChecked(self.config.get('autostart', False))
-        startup_layout.addWidget(self.autostartCheckbox)
-        self.hotkeyEnabledCheck = QCheckBox('额外的单击显隐快捷键')
-        self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
-        self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
-        startup_layout.addWidget(self.hotkeyEnabledCheck)
-        shortcut_row = ResponsiveSettingsRow()
-        self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey') or DEFAULT_GLOBAL_HOTKEY))
-        self.hotkeyEdit.setToolTip('按下新的组合键后点击“应用”；未开始输入时切换设置窗口。')
-        self.hotkeyPresetComboBox = QComboBox()
-        self.hotkeyPresetComboBox.addItem('默认组合键', DEFAULT_GLOBAL_HOTKEY)
-        for number in range(13, 25):
-            self.hotkeyPresetComboBox.addItem(f'F{number}', f'F{number}')
-        self.hotkeyPresetComboBox.addItem('自定义组合键…', None)
-        self.syncGuideHotkeyPreset()
-        self.hotkeyPresetComboBox.currentIndexChanged.connect(self.changeGuideHotkeyPreset)
-        self.hotkeyEdit.keySequenceChanged.connect(self.syncGuideHotkeyPreset)
-        self.hotkeyEnabledCheck.toggled.connect(self.updateGuideHotkeyControls)
-        shortcut_row.addWidget(self.hotkeyPresetComboBox, 1)
-        self.hotkeyApplyButton = QPushButton('应用')
-        self.hotkeyApplyButton.setEnabled(self.guide_hotkey.supported)
-        self.hotkeyApplyButton.clicked.connect(self.saveGuideHotkey)
-        shortcut_row.addWidget(self.hotkeyApplyButton)
-        startup_layout.addLayout(shortcut_row)
-        startup_layout.addWidget(self.hotkeyEdit)
-        self.hotkeyStatus = QLabel('可直接选择 F22，再点击“应用”；隐藏码表时输入继续运行。')
-        self.hotkeyStatus.setWordWrap(True)
-        startup_layout.addWidget(self.hotkeyStatus)
-        inputSettingsLayout.addWidget(startup_group)
         self.updateFastMorseModeAvailability()
         self.updateTimingSummary()
 
         self.DeviceButton = QPushButton("音频设备")
-        self.SaveButton = QPushButton("保存设置")
         self.GOButton = QPushButton("开始输入")
 
         self.iconGroupBox.setLayout(inputSettingsLayout)
@@ -1528,6 +1534,7 @@ class Window(QDialog):
         for control in (self.maxDitTimeLabel, self.maxDitTimeEdit):
             control.setVisible(single)
         self.updateTimingSummary()
+        self.saveSettings()
 
     def updateTimingSummary(self):
         unit = 1200 / self.wpmEdit.value()
@@ -1542,31 +1549,51 @@ class Window(QDialog):
         self.fontSizeScaleEdit.setVisible(manual)
 
     def applyStandardKeyerPreset(self):
-        self.keySelectionRadioTwoKey.setChecked(True)
-        self.fastMorseModeCheckbox.setChecked(True)
-        self.wpmEdit.setValue(15)
-        self.customTimingCheck.setChecked(False)
-        self.maxDitTimeEdit.setValue(0)
-        self.minLetterPauseEdit.setValue(0)
-        self.toneFrequencyEdit.setValue(600)
-        self.toneVolumeEdit.setValue(30)
-        self.confirmationSoundCheck.setChecked(False)
-        self.withSound.setChecked(True)
-        self.updateAudioProperties()
-        self.updateFastMorseModeAvailability()
+        previous = self._settings_ready
+        self._settings_ready = False
+        try:
+            self.keySelectionRadioTwoKey.setChecked(True)
+            self.fastMorseModeCheckbox.setChecked(True)
+            self.wpmEdit.setValue(15)
+            self.customTimingCheck.setChecked(False)
+            self.maxDitTimeEdit.setValue(0)
+            self.minLetterPauseEdit.setValue(0)
+            self.toneFrequencyEdit.setValue(600)
+            self.toneVolumeEdit.setValue(30)
+            self.confirmationSoundCheck.setChecked(False)
+            self.withSound.setChecked(True)
+            self.updateAudioProperties()
+            self.updateFastMorseModeAvailability()
+        finally:
+            self._settings_ready = previous
+        self.saveSettings()
 
     def previewMorseTone(self):
         self.previewAudioSettings()
         self.audio.preview()
 
-    def saveSettings (self):
+    def saveSettings(self, *_args):
+        if not self._settings_ready:
+            return False
         try:
-            self.config = self.collect_config()
+            config = self.collect_config(include_bindings=False)
         except (ValueError, TypeError) as error:
-            QMessageBox.warning(self, '设置无效', str(error) or '请检查输入及声音设置。')
-            return
-        self.saveConfig(self.config)
-        self.applyGuideHotkey()
+            if not self._shutting_down:
+                QMessageBox.warning(self, '设置无效', str(error) or '请检查输入及声音设置。')
+            return False
+        self.config = config
+        return self.saveConfig(config)
+
+    def _bindSettingsPersistence(self):
+        for box in (self.iconComboBoxKeyOne, self.iconComboBoxKeyTwo, self.iconComboBoxKeyThree):
+            box.currentIndexChanged.connect(self.saveSettings)
+        self.fastMorseModeCheckbox.clicked.connect(self.saveSettings)
+        self.wpmEdit.valueChanged.connect(self.saveSettings)
+        self.maxDitTimeEdit.valueChanged.connect(self.saveSettings)
+        self.minLetterPauseEdit.valueChanged.connect(self.saveSettings)
+        self.fontSizeScaleEdit.valueChanged.connect(self.saveSettings)
+        self.autostartCheckbox.toggled.connect(self.saveSettings)
+        self.startInTrayCheckbox.toggled.connect(self.saveSettings)
 
     def changeAudioDevice(self):
         self.audioSelector.show()

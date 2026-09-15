@@ -1,5 +1,7 @@
 """Settings/tray integration; registration and global hotkeys stay mocked."""
 
+import json
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
@@ -22,6 +24,29 @@ class DesktopIntegrationTests(TestCase):
         self.assertTrue(self.window.trayIcon.isVisible())
         self.window.presentAtLaunch(startup=False)
         self.assertTrue(self.window.isVisible())
+
+    def test_start_in_tray_hides_settings_on_normal_launch(self):
+        self.window.hide()
+        self.window.config['start_in_tray'] = True
+        self.window.presentAtLaunch(startup=False)
+        self.assertFalse(self.window.isVisible())
+        self.assertIsNone(self.window.listenerThread)
+        self.assertTrue(self.window.trayIcon.isVisible())
+        self.window.presentAtLaunch(startup=False)
+        self.assertFalse(self.window.isVisible())
+
+    def test_start_in_tray_auto_input_starts_without_showing_settings_or_guide(self):
+        self.window.hide()
+        self.window.config.update(start_in_tray=True, autostart=True)
+        with patch.object(morse.VirtualKeyboardView, 'show') as show:
+            self.window.presentAtLaunch(startup=False)
+        show.assert_not_called()
+        view = self.window.codeslayoutview
+        self.views.append(view)
+        self.assertFalse(view.isVisible())
+        self.assertFalse(self.window.isVisible())
+        self.assertIsNotNone(self.window.listenerThread)
+        self.assertTrue(self.window.onOffAction.isChecked())
 
     def test_login_auto_input_starts_without_flashing_guide(self):
         self.window.hide()
@@ -80,6 +105,13 @@ class DesktopIntegrationTests(TestCase):
             self.window.hotkeyApplyButton.click()
             register.assert_called_with('')
         self.assertEqual(self.window.config['guide_hotkey'], '')
+
+    def test_startup_option_is_the_first_settings_group(self):
+        first = self.window.iconGroupBox.layout().itemAt(0).widget()
+        self.assertEqual(first.title(), '启动与快捷键')
+        self.assertIn('开机自启', self.window.startupCheckbox.text())
+        self.assertEqual(self.window.startupCheckbox.isEnabled(),
+                         self.window.startup_registration.supported)
 
     def test_startup_checkbox_writes_only_after_user_action_and_reports_failure(self):
         registration = Mock(supported=True)
@@ -161,11 +193,26 @@ class DesktopIntegrationTests(TestCase):
     def test_pinyin_switch_mode_and_ime_sync_option_survive_settings_reload(self):
         self.window.pinyinHoldRadio.setChecked(True)
         self.window.imeSyncCheck.setChecked(True)
-        self.window.SaveButton.click()
+        self.window.pinyinApplyButton.click()
         restored = morse.ConfigManager(self.window.configManager.config_file)
         self.assertEqual(restored.config['pinyin_layer_mode'], 'hold')
         self.assertTrue(restored.config['pinyin_ime_sync'])
         self.assertFalse(self.window.ime_sync.enabled)  # Settings alone do not write to the IME.
+
+    def test_autostart_input_choice_persists_without_a_save_button(self):
+        self.assertFalse(hasattr(self.window, 'SaveButton'))
+        self.window.autostartCheckbox.setChecked(True)
+        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
+        self.assertTrue(saved['autostart'])
+        self.window.autostartCheckbox.setChecked(False)
+        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
+        self.assertFalse(saved['autostart'])
+        self.window.startInTrayCheckbox.setChecked(True)
+        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
+        self.assertTrue(saved['start_in_tray'])
+        self.window.startInTrayCheckbox.setChecked(False)
+        saved = json.loads(Path(self.window.configManager.config_file).read_text(encoding='utf-8'))
+        self.assertFalse(saved['start_in_tray'])
 
     def test_invalid_saved_pinyin_binding_remains_visible_as_an_error(self):
         self.window.config.update(pinyin_layer_key='F23', keyone='F23')
@@ -225,6 +272,8 @@ class DesktopIntegrationTests(TestCase):
 
     def test_default_theme_is_system_and_first_launch_does_not_register_startup(self):
         self.assertEqual(morse.DEFAULT_CONFIG['theme'], 'system')
+        self.assertFalse(morse.DEFAULT_CONFIG['start_in_tray'])
+        self.assertFalse(self.window.startInTrayCheckbox.isChecked())
         self.assertEqual(self.window.themeComboBox.currentData(), 'system')
         with patch.object(self.window.startup_registration, 'set_enabled') as register:
             self.window.presentAtLaunch(startup=True)

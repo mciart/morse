@@ -134,18 +134,17 @@ class WindowBehaviorTests(unittest.TestCase):
         import config_store
         path = Path(self.window.configManager.config_file)
         original = path.read_bytes()
-        self.window.wpmEdit.setValue(22)
         with patch.object(config_store.os, 'replace', side_effect=PermissionError('locked')), \
              patch.object(morse.QMessageBox, 'warning',
                           side_effect=lambda *args: self.window.saveConfig(self.window.config)) as warning, \
              self.assertLogs(level='ERROR'):
-            self.window.SaveButton.click()
-            self.window.SaveButton.click()
+            self.window.wpmEdit.setValue(22)
+            self.window.saveSettings()
         warning.assert_called_once()
         self.assertTrue(self.window.configSaveStatus.isVisible())
         self.assertIn('设置保存失败', self.window.configSaveStatus.text())
         self.assertEqual(path.read_bytes(), original)
-        self.window.SaveButton.click()
+        self.window.saveSettings()
         self.assertTrue(self.window.configSaveStatus.isHidden())
         self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['wpm'], 22)
 
@@ -164,10 +163,9 @@ class WindowBehaviorTests(unittest.TestCase):
 
     def test_automatic_retry_preserves_settings_from_a_failed_explicit_save(self):
         import config_store
-        self.window.wpmEdit.setValue(22)
         with patch.object(config_store.os, 'replace', side_effect=PermissionError('locked')), \
              patch.object(morse.QMessageBox, 'warning'), self.assertLogs(level='ERROR'):
-            self.window.SaveButton.click()
+            self.window.wpmEdit.setValue(22)
         self.assertTrue(self.window.configSaveStatus.isVisible())
         selector = self.window.themeComboBox
         selector.setCurrentIndex(selector.findData('dark'))
@@ -218,14 +216,15 @@ class WindowBehaviorTests(unittest.TestCase):
         for position in (0, scroll.maximum()):
             scroll.setValue(position)
             self.app.processEvents()
-            for button in (self.window.DeviceButton, self.window.SaveButton, self.window.GOButton):
+            for button in (self.window.DeviceButton, self.window.GOButton):
                 origin = button.mapTo(self.window, morse.QtCore.QPoint(0, 0))
                 self.assertTrue(button.isVisible())
                 self.assertTrue(self.window.rect().contains(morse.QtCore.QRect(origin, button.size())))
                 self.assertFalse(self.window.settings_scroll.isAncestorOf(button))
-        self.window.SaveButton.click()
+        self.assertFalse(hasattr(self.window, 'SaveButton'))
+        self.window.wpmEdit.setValue(18)
         with open(self.window.configManager.config_file, encoding='utf-8') as stream:
-            self.assertEqual(json.load(stream), self.window.collect_config())
+            self.assertEqual(json.load(stream)['wpm'], 18)
         self.start_input()
 
     def settle_settings_layout(self):
@@ -255,7 +254,7 @@ class WindowBehaviorTests(unittest.TestCase):
                     QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, widget)
                 self.assertGreaterEqual(field.width(), widget.fontMetrics().horizontalAdvance(widget.currentText()),
                                         widget.currentText())
-        for button in (self.window.DeviceButton, self.window.SaveButton, self.window.GOButton):
+        for button in (self.window.DeviceButton, self.window.GOButton):
             origin = button.mapTo(self.window, morse.QtCore.QPoint())
             self.assertTrue(self.window.rect().contains(morse.QtCore.QRect(origin, button.size())))
             self.assertGreaterEqual(button.width(), button.minimumSizeHint().width(), button.text())

@@ -118,7 +118,7 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
         layout.addWidget(scroll, 1)
         actions = QWidget()
         action_layout = QHBoxLayout(actions)
-        for caption in ('音频设备', '保存设置', '开始输入'):
+        for caption in ('音频设备', '开始输入'):
             action_layout.addWidget(QPushButton(caption))
         layout.addWidget(actions)
         self.available = QRect(0, 0, 1200, 900)
