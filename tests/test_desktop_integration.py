@@ -140,7 +140,7 @@ class DesktopIntegrationTests(TestCase):
             self.window.startDesktopIntegration()
             self.window.hotkeyApplyButton.click()
             register.assert_called_with('')  # The same key belongs to the two-gesture listener.
-            self.assertIn('单击显隐／双击切换中英文', self.window.hotkeyStatus.text())
+            self.assertIn('单击显隐／双击切换拼音层', self.window.hotkeyStatus.text())
         self.assertEqual(self.window.configManager.config['guide_hotkey'], 'F22')
         selector.setCurrentIndex(selector.findData(None))
         self.assertFalse(self.window.hotkeyEdit.isHidden())
@@ -166,7 +166,10 @@ class DesktopIntegrationTests(TestCase):
         self.assertEqual(self.window.selectedPinyinMode(), 'toggle')
         self.assertEqual(self.window.layer_gesture.mode, 'toggle')
         self.assertEqual(self.window.pinyinToggleRadio.text(), '双击切换')
-        self.assertIn('单击显示／隐藏码表，双击切换中／英文', self.window.pinyinKeyStatus.text())
+        self.assertIn('英文层', self.window.pinyinHint.text())
+        self.assertIn('可选加速', self.window.pinyinHint.text())
+        self.assertIn('拼音层', self.window.pinyinLayerCheck.text())
+        self.assertIn('单击显示／隐藏码表，双击切换拼音层／英文层', self.window.pinyinKeyStatus.text())
         self.window.pinyinHoldRadio.setChecked(True)
         self.window.pinyinKeyComboBox.setCurrentIndex(self.window.pinyinKeyComboBox.findData('F21'))
         with patch.object(self.window.guide_hotkey, 'set_sequence'):
@@ -194,6 +197,10 @@ class DesktopIntegrationTests(TestCase):
             register.assert_called_with('F22')
         self.layer_hook.assert_called_with('')
         self.assertEqual(self.window.config.get('guide_hotkey'), 'F22')
+        self.assertFalse(self.window.pinyinHoldRadio.isEnabled())
+        self.assertFalse(self.window.imeSyncCheck.isEnabled())
+        self.assertTrue(self.window.pinyinApplyButton.isEnabled())
+        self.assertIn('拼音层已关闭', self.window.pinyinKeyStatus.text())
 
     def test_pinyin_switch_mode_and_ime_sync_option_survive_settings_reload(self):
         self.window.pinyinHoldRadio.setChecked(True)
@@ -203,6 +210,32 @@ class DesktopIntegrationTests(TestCase):
         self.assertEqual(restored.config['pinyin_layer_mode'], 'hold')
         self.assertTrue(restored.config['pinyin_ime_sync'])
         self.assertFalse(self.window.ime_sync.enabled)  # Settings alone do not write to the IME.
+
+    def test_pinyin_layer_checkbox_disables_related_controls(self):
+        self.assertTrue(self.window.pinyinToggleRadio.isEnabled())
+        self.assertTrue(self.window.imeSyncCheck.isEnabled())
+        self.window.pinyinLayerCheck.setChecked(False)
+        self.assertFalse(self.window.pinyinHoldRadio.isEnabled())
+        self.assertFalse(self.window.pinyinToggleRadio.isEnabled())
+        self.assertFalse(self.window.pinyinKeyComboBox.isEnabled())
+        self.assertFalse(self.window.imeSyncCheck.isEnabled())
+        self.assertTrue(self.window.pinyinApplyButton.isEnabled())
+        self.window.pinyinLayerCheck.setChecked(True)
+        self.assertTrue(self.window.imeSyncCheck.isEnabled())
+        self.assertTrue(self.window.pinyinKeyComboBox.isEnabled())
+
+    def test_ime_sync_stays_off_while_pinyin_layer_is_disabled(self):
+        self.window.imeSyncCheck.setChecked(True)
+        self.window.pinyinLayerCheck.setChecked(False)
+        with patch.object(self.window.guide_hotkey, 'set_sequence'):
+            self.window.startDesktopIntegration()
+            self.window.pinyinApplyButton.click()
+        self.assertTrue(self.window.config['pinyin_ime_sync'])
+        self.assertFalse(self.window.config['pinyin_layer_enabled'])
+        self.start_input()
+        self.assertFalse(self.window.ime_sync.enabled)
+        self.assertFalse(self.window._pinyin_layer)
+        self.assertIn('不同步微软拼音', self.window.imeSyncStatus.text())
 
     def test_autostart_input_choice_persists_without_a_save_button(self):
         self.assertFalse(hasattr(self.window, 'SaveButton'))

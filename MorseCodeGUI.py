@@ -865,14 +865,19 @@ class Window(QWidget):
         self.configManager.config.update(values)
         self.saveConfig(self.configManager.config)
         self.applyGuideHotkey()
+        self.updatePinyinLayerControls()
 
     def pinyinKeyReady(self, key):
         if hasattr(self, 'pinyinKeyStatus'):
-            self.pinyinKeyStatus.setText(
-                (f'{key}：' + ('单击显示／隐藏码表，双击切换中／英文。'
-                              if self.config.get('pinyin_layer_mode', 'toggle') == 'toggle'
-                              else '按住输入拼音，松开回英文，双击显示／隐藏码表。'))
-                if key else '拼音层按键已关闭。')
+            if hasattr(self, 'pinyinLayerCheck') and not self.pinyinLayerCheck.isChecked():
+                self.pinyinKeyStatus.setText(
+                    '拼音层已关闭，仅使用英文码表。需要显隐码表时，可开启上方的额外快捷键。')
+            else:
+                self.pinyinKeyStatus.setText(
+                    (f'{key}：' + ('单击显示／隐藏码表，双击切换拼音层／英文层。'
+                                  if self.config.get('pinyin_layer_mode', 'toggle') == 'toggle'
+                                  else '按住使用拼音层，松开回英文层，双击显示／隐藏码表。'))
+                    if key else '拼音层按键已关闭。')
 
     def pinyinKeyError(self, message):
         logging.warning('Pinyin layer key: %s', message)
@@ -932,6 +937,7 @@ class Window(QWidget):
 
     def applyImeSync(self):
         enabled = bool(self.config.get('pinyin_ime_sync', False) and
+                       self.config.get('pinyin_layer_enabled', True) and
                        self._desktop_integration_started and self.listenerThread is not None
                        and not self.config.get('off', False))
         if enabled:
@@ -943,11 +949,15 @@ class Window(QWidget):
             self._ime_request = None
             self._ime_pending_codes = []
             self._ime_deferred_layer = None
-            self.imeSyncStatus.setText('开始输入后同步微软拼音。' if self.config.get('pinyin_ime_sync')
-                                       else '微软拼音同步已关闭。')
+            if not self.config.get('pinyin_layer_enabled', True):
+                self.imeSyncStatus.setText('拼音层关闭时保持英文码表，不同步微软拼音。')
+            else:
+                self.imeSyncStatus.setText('开始输入后同步微软拼音。' if self.config.get('pinyin_ime_sync')
+                                           else '微软拼音同步已关闭。')
 
     def imeStateChanged(self, state):
-        if self._shutting_down or not self.ime_sync.enabled:
+        if (self._shutting_down or not self.ime_sync.enabled or
+                not self.config.get('pinyin_layer_enabled', True)):
             return
         if state is not None and state.process_id == os.getpid():
             return  # Settings/guide focus is not the user's target input field.
@@ -1077,6 +1087,17 @@ class Window(QWidget):
         self.hotkeyEdit.setEnabled(enabled)
         self.hotkeyEdit.setVisible(self.hotkeyPresetComboBox.currentData() is None)
 
+    def updatePinyinLayerControls(self):
+        enabled = self.pinyinLayerCheck.isChecked() and self.guide_key.supported
+        for widget in (self.pinyinHoldRadio, self.pinyinToggleRadio,
+                       self.pinyinKeyComboBox, self.imeSyncCheck):
+            widget.setEnabled(enabled)
+        self.pinyinApplyButton.setEnabled(self.guide_key.supported)
+        key = ''
+        if self.pinyinLayerCheck.isChecked():
+            key = self.pinyinKeyComboBox.currentData() or self.config.get('pinyin_layer_key', 'F22')
+        self.pinyinKeyReady(key)
+
     def applyGuideHotkey(self):
         if self._desktop_integration_started:
             mode = self.config.get('pinyin_layer_mode', 'toggle')
@@ -1119,7 +1140,7 @@ class Window(QWidget):
                     # One owned press/release hook handles this trigger; an
                     # additional WM_HOTKEY must not fire on its first press.
                     self.guide_hotkey.set_sequence('')
-                    action = ('单击显隐／双击切换中英文' if mode == 'toggle'
+                    action = ('单击显隐／双击切换拼音层' if mode == 'toggle'
                               else '按住拼音／双击显隐')
                     self.hotkeyStatus.setText(layer_key + ' 已使用' + action + '。')
                     return
@@ -1220,6 +1241,7 @@ class Window(QWidget):
         self.hotkeyEnabledCheck = QCheckBox('启用额外的单击显隐快捷键')
         self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey')))
         self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
+        self.hotkeyEnabledCheck.setToolTip('与拼音区操作按键相互独立。拼音层关闭后，可用此项显示／隐藏码表。')
         hotkey_layout.addWidget(self.hotkeyEnabledCheck)
         shortcut_row = ResponsiveSettingsRow()
         self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey') or DEFAULT_GLOBAL_HOTKEY))
@@ -1240,7 +1262,7 @@ class Window(QWidget):
         shortcut_row.addWidget(self.hotkeyApplyButton)
         hotkey_layout.addLayout(shortcut_row)
         hotkey_layout.addWidget(self.hotkeyEdit)
-        self.hotkeyStatus = QLabel('默认关闭。日常请用 F22；需要时再开启，可选择功能键或自定义组合键，然后点击“应用”。')
+        self.hotkeyStatus = QLabel('默认关闭。码表显隐请用拼音区的操作按键；需要另一组快捷键时再开启并点击“应用”。')
         self.hotkeyStatus.setWordWrap(True)
         hotkey_layout.addWidget(self.hotkeyStatus)
         startup_layout.addWidget(hotkey_group)
@@ -1411,16 +1433,25 @@ class Window(QWidget):
 
         pinyin_group = QGroupBox('拼音与码表切换')
         pinyin_layout = QVBoxLayout(pinyin_group)
-        self.pinyinLayerCheck = QCheckBox('启用码表操作按键')
+        self.pinyinHint = QLabel(
+            '英文层输出的字母可直接进入系统拼音输入法选字。拼音层是可选加速：'
+            '用声母／韵母一次输入完整片段，不是打中文的前提。')
+        self.pinyinHint.setWordWrap(True)
+        self.pinyinHint.setProperty('role', 'muted')
+        pinyin_layout.addWidget(self.pinyinHint)
+        self.pinyinLayerCheck = QCheckBox('启用拼音层和操作按键')
         self.pinyinLayerCheck.setChecked(self.config.get('pinyin_layer_enabled', True))
         self.pinyinLayerCheck.setEnabled(self.guide_key.supported)
+        self.pinyinLayerCheck.setToolTip(
+            '开启后可用操作按键切换拼音码表并显示／隐藏对照。关闭后只使用英文码表；'
+            '系统拼音仍可把英文字母组词。')
         pinyin_layout.addWidget(self.pinyinLayerCheck)
         pinyin_row = ResponsiveSettingsRow()
         self.pinyinModeButtons = QButtonGroup(self)
         self.pinyinHoldRadio = QRadioButton('按住使用')
         self.pinyinToggleRadio = QRadioButton('双击切换')
-        self.pinyinHoldRadio.setToolTip('按住进入拼音层，松开回英文；双击显示／隐藏码表。')
-        self.pinyinToggleRadio.setToolTip('单击显示／隐藏码表；双击切换中／英文，码表保持当前显隐状态。')
+        self.pinyinHoldRadio.setToolTip('按住进入拼音层，松开回英文层；双击显示／隐藏码表。')
+        self.pinyinToggleRadio.setToolTip('单击显示／隐藏码表；双击在拼音层和英文层之间切换，码表保持当前显隐状态。')
         self.pinyinModeButtons.addButton(self.pinyinHoldRadio)
         self.pinyinModeButtons.addButton(self.pinyinToggleRadio)
         self.pinyinHoldRadio.setChecked(self.config.get('pinyin_layer_mode', 'toggle') != 'toggle')
@@ -1437,7 +1468,7 @@ class Window(QWidget):
                 self.pinyinKeyComboBox.addItem(f'F{number}', f'F{number}')
         index = self.pinyinKeyComboBox.findData(self.config.get('pinyin_layer_key', 'F22'))
         self.pinyinKeyComboBox.setCurrentIndex(index if index >= 0 else self.pinyinKeyComboBox.findData('F22'))
-        self.pinyinKeyComboBox.setToolTip('独立功能键，不能与点、划、确认键重复；F12 由系统保留。')
+        self.pinyinKeyComboBox.setToolTip('只负责切层和显隐。独立功能键，不能与点、划、确认键重复；F12 由系统保留。')
         pinyin_row.addWidget(self.pinyinKeyComboBox, 1)
         self.pinyinApplyButton = QPushButton('应用')
         self.pinyinApplyButton.setEnabled(self.guide_key.supported)
@@ -1445,17 +1476,19 @@ class Window(QWidget):
         pinyin_row.addWidget(self.pinyinApplyButton)
         pinyin_layout.addLayout(pinyin_row)
         self.pinyinKeyStatus = QLabel()
-        self.pinyinKeyReady(self.config.get('pinyin_layer_key', 'F22'))
         self.pinyinKeyStatus.setWordWrap(True)
         pinyin_layout.addWidget(self.pinyinKeyStatus)
-        self.imeSyncCheck = QCheckBox('与微软拼音中／英文状态双向同步')
+        self.imeSyncCheck = QCheckBox('拼音层与微软拼音中／英状态双向同步')
         self.imeSyncCheck.setChecked(self.config.get('pinyin_ime_sync', False))
-        self.imeSyncCheck.setEnabled(self.guide_key.supported)
-        self.imeSyncCheck.setToolTip('切换中／英文时同步当前输入窗口；显隐码表不改变输入法。切回英文时，未选字内容保留为原拼音。')
+        self.imeSyncCheck.setToolTip(
+            '仅在启用拼音层后生效。微软拼音为“中”时显示拼音码表，为“英”时显示英文码表；'
+            '用操作按键切层时输入法跟随。显隐码表不改变输入法。切回英文时，未选字内容保留为原拼音。')
         pinyin_layout.addWidget(self.imeSyncCheck)
-        self.imeSyncStatus = QLabel('同步默认关闭；开启后点击“应用”，开始输入后生效。')
+        self.imeSyncStatus = QLabel('同步默认关闭。仅在启用拼音层后生效；开启后点击“应用”，开始输入后写入当前窗口。')
         self.imeSyncStatus.setWordWrap(True)
         pinyin_layout.addWidget(self.imeSyncStatus)
+        self.pinyinLayerCheck.toggled.connect(self.updatePinyinLayerControls)
+        self.updatePinyinLayerControls()
         inputSettingsLayout.addWidget(pinyin_group)
         self.updateFastMorseModeAvailability()
         self.updateTimingSummary()

@@ -65,7 +65,7 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
         return widget
 
     def test_checkbox_text_wraps_and_restores_full_caption(self):
-        checkbox = self.own(QCheckBox('与微软拼音中／英文状态双向同步'))
+        checkbox = self.own(QCheckBox('拼音层与微软拼音中／英状态双向同步'))
         original = checkbox.text()
         wrap_checkbox_text(checkbox, 120)
         self.assertIn('\n', checkbox.text())
@@ -113,7 +113,7 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         for _ in range(20):
-            content_layout.addWidget(QCheckBox('与微软拼音中／英文状态双向同步'))
+            content_layout.addWidget(QCheckBox('拼音层与微软拼音中／英状态双向同步'))
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
         actions = QWidget()
@@ -180,7 +180,7 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         for _ in range(20):
-            content_layout.addWidget(QCheckBox('与微软拼音中／英文状态双向同步'))
+            content_layout.addWidget(QCheckBox('拼音层与微软拼音中／英状态双向同步'))
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
         actions = QWidget()
