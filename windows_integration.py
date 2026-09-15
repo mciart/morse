@@ -22,6 +22,9 @@ from PyQt5.QtWidgets import QMenu
 DEFAULT_GLOBAL_HOTKEY = 'Ctrl+Alt+Shift+M'
 RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 RUN_VALUE = 'MorseWriter'
+INSTANCE_ID = 'MorseWriter.mciart'
+INSTANCE_PIPE = INSTANCE_ID + '.pipe'
+ERROR_ALREADY_EXISTS = 183
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
@@ -250,6 +253,108 @@ class StartupRegistration:
         except OSError as error:
             raise RuntimeError('无法修改开机自启设置：' + str(error)) from error
         return bool(enabled)
+
+
+class SingleInstance(QObject):
+    """Keep one process; a second launch asks the first to show itself.
+
+    The mutex name is shared with the installer AppMutex so an upgrade can see
+    a running copy. The local socket carries the activation payload.
+    """
+
+    activated = pyqtSignal()
+
+    def __init__(self, parent=None, *, name=INSTANCE_ID, pipe_name=None,
+                 platform_name=None, mutex_claimer=None, socket_factory=None,
+                 server_factory=None, notify_attempts=8, notify_delay_ms=150):
+        super().__init__(parent)
+        self.name = name
+        self.pipe_name = pipe_name or (name + '.pipe')
+        self.supported = (platform_name or platform.system()) == 'Windows'
+        self._mutex_claimer = mutex_claimer
+        self._socket_factory = socket_factory
+        self._server_factory = server_factory
+        self._notify_attempts = max(1, int(notify_attempts))
+        self._notify_delay_ms = max(0, int(notify_delay_ms))
+        self._mutex = None
+        self._server = None
+        self.owned = False
+
+    def acquire(self):
+        """Return True when this process should continue running."""
+        if not self.supported:
+            self.owned = True
+            return True
+        claimer = self._mutex_claimer or self._claim_mutex
+        if not claimer():
+            self.notify_existing()
+            return False
+        self._listen()
+        self.owned = True
+        return True
+
+    def _claim_mutex(self):
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        ctypes.set_last_error(0)
+        handle = kernel32.CreateMutexW(None, False, self.name)
+        if not handle:
+            logging.warning('无法创建单实例标记（Windows 错误 %s）。', ctypes.get_last_error())
+            return True
+        if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(handle)
+            return False
+        self._mutex = handle
+        return True
+
+    def _make_socket(self):
+        from PyQt5.QtNetwork import QLocalSocket
+        return QLocalSocket(self)
+
+    def notify_existing(self):
+        for attempt in range(self._notify_attempts):
+            if self._try_notify():
+                return True
+            if attempt + 1 < self._notify_attempts and self._notify_delay_ms:
+                QThread.msleep(self._notify_delay_ms)
+        logging.warning('摩斯输入已在运行，但无法通知已有窗口。')
+        return False
+
+    def _try_notify(self):
+        socket = (self._socket_factory or self._make_socket)()
+        try:
+            socket.connectToServer(self.pipe_name)
+            if not socket.waitForConnected(250):
+                return False
+            socket.write(b'activate\n')
+            return bool(socket.waitForBytesWritten(250))
+        finally:
+            if hasattr(socket, 'disconnectFromServer'):
+                socket.disconnectFromServer()
+
+    def _listen(self):
+        from PyQt5.QtNetwork import QLocalServer
+        factory = self._server_factory or QLocalServer
+        if factory is QLocalServer:
+            QLocalServer.removeServer(self.pipe_name)
+        self._server = factory(self)
+        self._server.newConnection.connect(self._accept)
+        if not self._server.listen(self.pipe_name):
+            logging.warning('无法监听单实例通道：%s', self._server.errorString())
+
+    def _accept(self):
+        while self._server.hasPendingConnections():
+            socket = self._server.nextPendingConnection()
+            socket.readyRead.connect(lambda sock=socket: self._read(sock))
+            socket.disconnected.connect(socket.deleteLater)
+
+    def _read(self, socket):
+        payload = bytes(socket.readAll())
+        if b'activate' in payload:
+            self.activated.emit()
 
 
 _KEY_VKS = {

@@ -500,6 +500,7 @@ class VirtualKeyboardView(QWidget):
         app.primaryScreenChanged.connect(self._onScreenTopologyChanged)
         self.setWindowTitle('摩斯输入 · 键盘与鼠标')
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
+        self.setAttribute(Qt.WA_DontShowOnScreen, True)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus |
                             Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -518,6 +519,7 @@ class VirtualKeyboardView(QWidget):
         self._bindWindowScreen()
         self._restorePosition()
         self._position_guard = 0
+        self.setAttribute(Qt.WA_DontShowOnScreen, False)
 
     def _positionWindow(self):
         """Use the current native frame, never QWidget's previous-frame cache."""

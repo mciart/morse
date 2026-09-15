@@ -508,5 +508,44 @@ class GlobalHotkeyTests(unittest.TestCase):
         error.assert_called_once()
 
 
+class SingleInstanceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_unsupported_platform_owns_the_process(self):
+        instance = integration.SingleInstance(platform_name='Linux')
+        self.assertTrue(instance.acquire())
+        self.assertTrue(instance.owned)
+
+    def test_existing_mutex_notifies_and_does_not_own(self):
+        socket = Mock()
+        socket.waitForConnected.return_value = True
+        socket.waitForBytesWritten.return_value = True
+        instance = integration.SingleInstance(
+            platform_name='Windows', mutex_claimer=lambda: False,
+            socket_factory=lambda: socket, notify_attempts=1, notify_delay_ms=0)
+        self.assertFalse(instance.acquire())
+        socket.connectToServer.assert_called_once_with(instance.pipe_name)
+        socket.write.assert_called_once_with(b'activate\n')
+        self.assertFalse(instance.owned)
+
+    def test_owned_instance_listens_and_activate_payload_emits(self):
+        server = Mock()
+        server.listen.return_value = True
+        instance = integration.SingleInstance(
+            platform_name='Windows', mutex_claimer=lambda: True,
+            server_factory=lambda parent: server)
+        self.assertTrue(instance.acquire())
+        server.newConnection.connect.assert_called()
+        server.listen.assert_called_once_with(instance.pipe_name)
+        activated = Mock()
+        instance.activated.connect(activated)
+        socket = Mock()
+        socket.readAll.return_value = b'activate\n'
+        instance._read(socket)
+        activated.assert_called_once_with()
+
+
 if __name__ == '__main__':
     unittest.main()

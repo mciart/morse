@@ -31,7 +31,8 @@ from ime_sync import ImeSynchronizer
 from settings_layout import SettingsWindowSizer, ResponsiveSettingsRow, ResponsiveSettingsForm
 from tone_audio import ToneAudio
 from windows_integration import (StartupRegistration, GlobalHotkey, parse_hotkey,
-                                 DEFAULT_GLOBAL_HOTKEY, show_guide_without_activation)
+                                 DEFAULT_GLOBAL_HOTKEY, show_guide_without_activation,
+                                 SingleInstance)
 from app_paths import bootstrap_assets, layouts_seed_path
 from app_paths import user_data_dir as writable_user_data_dir
 
@@ -80,7 +81,8 @@ class AudioDeviceSelector(QWidget):
     deviceChanged = pyqtSignal(str)
 
     def __init__(self, audio, parent=None, device_name=""):
-        super().__init__(parent, Qt.Window)
+        super().__init__(parent, Qt.Dialog)
+        self.setAttribute(Qt.WA_DontShowOnScreen, True)
         self.audio = audio
         self.setWindowTitle('音频设备')
         layout = QVBoxLayout(self)
@@ -102,6 +104,11 @@ class AudioDeviceSelector(QWidget):
         layout.addWidget(self.status_label)
         self.audio.error.connect(self.status_label.setText)
         self.setWindowIcon(QIcon(':/morse-writer.ico'))
+        self.hide()
+
+    def show(self):
+        self.setAttribute(Qt.WA_DontShowOnScreen, False)
+        super().show()
 
     def device_changed(self, _index):
         name = self.device_selector.currentData()
@@ -478,6 +485,9 @@ class RepeatOnAction(Action):
 class Window(QDialog):
     def __init__(self, layoutManager=None, configManager=None):
         super(Window, self).__init__()
+        self.setWindowTitle("摩斯输入设置")
+        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
+        self.setAttribute(Qt.WA_QuitOnClose, False)
         self.layoutManager = layoutManager
         self.configManager = configManager
         self.config = self.configManager.get_config()
@@ -499,6 +509,7 @@ class Window(QDialog):
         self._settings_ready = False
         self._start_hidden = False
         self._desktop_integration_started = False
+        self._tray_retries = 0
         self.startup_registration = StartupRegistration()
         self.guide_hotkey = GlobalHotkey(self)
         self.guide_hotkey.activated.connect(self.toggleGuideVisibility)
@@ -591,10 +602,12 @@ class Window(QDialog):
         self.setIcon()
         self.trayIcon.show()
         self.updateTrayInputState()
-        self.setWindowTitle("摩斯输入设置")
-        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint)
         self.settings_sizer = SettingsWindowSizer(
             self, self.settings_scroll, self.settings_actions)
+        self.settings_sizer.apply_initial_size()
+        self._tray_retry_timer = QTimer(self)
+        self._tray_retry_timer.setInterval(400)
+        self._tray_retry_timer.timeout.connect(self.ensureTrayVisible)
         self._bindSettingsPersistence()
         self._settings_ready = True
 
@@ -850,6 +863,15 @@ class Window(QDialog):
         if self._shutting_down:
             return
         self._shutting_down = True
+        timer = getattr(self, '_tray_retry_timer', None)
+        if timer is not None:
+            timer.stop()
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.commitDataRequest.disconnect(self._commitSessionData)
+            except (TypeError, RuntimeError):
+                pass
         for cleanup in (self.ime_sync.stop, self.guide_key_timer.stop, self.guide_key.stop,
                         self.guide_hotkey.stop, self.stopIt, self.resetOutput, self.audio.shutdown):
             try:
@@ -874,6 +896,17 @@ class Window(QDialog):
         self.trayIcon.setIcon(icon)
         self.setWindowIcon(icon)
 
+    def _revealWindow(self):
+        self.setAttribute(Qt.WA_DontShowOnScreen, False)
+
+    def show(self):
+        self._revealWindow()
+        super().show()
+
+    def showNormal(self):
+        self._revealWindow()
+        super().showNormal()
+
     def iconActivated(self, reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.showCurrentWindow()
@@ -887,6 +920,23 @@ class Window(QDialog):
         else:
             show_guide_without_activation(target)
 
+    def activateRunningInstance(self):
+        self.ensureTrayVisible()
+        self.showCurrentWindow()
+
+    def ensureTrayVisible(self):
+        timer = getattr(self, '_tray_retry_timer', None)
+        if self._shutting_down or not hasattr(self, 'trayIcon'):
+            if timer is not None:
+                timer.stop()
+            return
+        if self.trayIcon.icon().isNull():
+            self.setIcon()
+        self.trayIcon.show()
+        self._tray_retries += 1
+        if timer is not None and self._tray_retries >= 15:
+            timer.stop()
+
     def toggleGuideVisibility(self):
         target = self.codeslayoutview if self.codeslayoutview is not None else self
         if target.isVisible() and not target.isMinimized():
@@ -895,8 +945,20 @@ class Window(QDialog):
             self.showCurrentWindow()
 
     def startDesktopIntegration(self):
-        self._desktop_integration_started = True
+        if not self._desktop_integration_started:
+            self._desktop_integration_started = True
+            QApplication.instance().commitDataRequest.connect(self._commitSessionData)
+            self._tray_retries = 0
+            self.ensureTrayVisible()
+            if (getattr(self, '_tray_retry_timer', None) is not None and
+                    QApplication.platformName() not in ('offscreen', 'minimal')):
+                self._tray_retry_timer.start()
         self.applyGuideHotkey()
+
+    def _commitSessionData(self, _manager=None):
+        # Restart Manager / logoff must actually quit so the installer can
+        # replace files. The close button still only hides to the tray.
+        self.quitApplication()
 
     def selectedPinyinMode(self):
         return 'toggle' if self.pinyinToggleRadio.isChecked() else 'hold'
@@ -1222,8 +1284,18 @@ class Window(QDialog):
                 self.start()
             elif not self._start_hidden:
                 self.show()
+            if '--from-installer' in sys.argv:
+                QTimer.singleShot(600, self._announceInstallerTray)
         finally:
             self._start_hidden = False
+
+    def _announceInstallerTray(self):
+        if self._shutting_down or not hasattr(self, 'trayIcon'):
+            return
+        self.ensureTrayVisible()
+        self.trayIcon.showMessage(
+            '摩斯输入', '程序已在系统托盘中运行。可点击托盘图标打开窗口。',
+            QSystemTrayIcon.Information, 5000)
 
     def updateTrayInputState(self):
         if hasattr(self, 'onOffAction'):
@@ -1670,6 +1742,10 @@ class Window(QDialog):
         self.trayIconMenu.addAction(self.onOpenSettingsAction)
         self.trayIconMenu.addSeparator()
         self.trayIconMenu.addAction(self.quitAction)
+        # Creating the HWND off-screen lets a never-shown settings dialog still
+        # host a tray icon after installer or start-in-tray launches.
+        self.setAttribute(Qt.WA_DontShowOnScreen, True)
+        self.winId()
         self.trayIcon = QSystemTrayIcon(self)
         self.trayIcon.setToolTip("摩斯输入")
         self.trayIcon.setContextMenu(self.trayIconMenu)
@@ -1898,6 +1974,11 @@ if __name__ == '__main__':
     install_diagnostics(user_data_dir)
     QtCore.qInstallMessageHandler(log_qt_message)
     app = CustomApplication(sys.argv)
+    instance = None
+    if smoke_report is None:
+        instance = SingleInstance(app)
+        if not instance.acquire():
+            sys.exit(0)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         # At Windows login Explorer may still be starting. Qt automatically
@@ -1925,6 +2006,8 @@ if __name__ == '__main__':
         verify_installation(window, smoke_report)
     else:
         window.startDesktopIntegration()
+        if instance is not None:
+            instance.activated.connect(window.activateRunningInstance)
         window.presentAtLaunch(startup=('--startup' in sys.argv or '/auto' in sys.argv))
 
     # Start the application event loop

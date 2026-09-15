@@ -75,5 +75,11 @@ class ReleaseResourceTests(unittest.TestCase):
                 build_release.check_bundle(bundle)
 
 
+    def test_version_info_identifies_the_publisher(self):
+        info = str(build_release.version_info('3.9.5'))
+        self.assertIn('mciart', info)
+        self.assertIn('摩斯输入', info)
+
+
 if __name__ == '__main__':
     unittest.main()

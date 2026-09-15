@@ -173,5 +173,25 @@ class SettingsWidgetLayoutTests(unittest.TestCase):
         self.assertTrue(window.rect().contains(actions.geometry()))
 
 
+    def test_hidden_window_is_sized_before_first_show(self):
+        window = self.own(QWidget())
+        layout = QVBoxLayout(window)
+        scroll = QScrollArea()
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        for _ in range(20):
+            content_layout.addWidget(QCheckBox('与微软拼音中／英文状态双向同步'))
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        actions = QWidget()
+        QHBoxLayout(actions).addWidget(QPushButton('开始输入'))
+        layout.addWidget(actions)
+        sizer = SettingsWindowSizer(window, scroll, actions,
+                                    screen_provider=lambda: QRect(0, 0, 1200, 900))
+        sizer.apply_initial_size()
+        self.assertFalse(window.isVisible())
+        self.assertGreaterEqual(window.width(), 560)
+
+
 if __name__ == '__main__':
     unittest.main()

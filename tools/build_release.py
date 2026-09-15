@@ -110,8 +110,10 @@ def version_info(version):
         kids=[StringFileInfo([StringTable('080404b0', [
             StringStruct('FileDescription', '摩斯输入'),
             StringStruct('FileVersion', version),
-            StringStruct('ProductName', 'MorseWriter'),
+            StringStruct('ProductName', '摩斯输入'),
             StringStruct('ProductVersion', version),
+            StringStruct('CompanyName', 'mciart'),
+            StringStruct('LegalCopyright', 'Copyright (C) mciart'),
             StringStruct('InternalName', 'MorseWriter'),
             StringStruct('OriginalFilename', 'MorseWriter.exe'),
         ])]), VarFileInfo([VarStruct('Translation', [0x0804, 1200])])],

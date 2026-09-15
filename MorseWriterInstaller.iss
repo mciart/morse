@@ -10,6 +10,8 @@
 
 [Setup]
 AppId={{2DB71CE2-A8F1-4EB9-BA6D-EE1EAD16659C}
+AppMutex=MorseWriter.mciart
+SetupMutex=MorseWriter.mciart.setup
 AppName={#MyAppName}
 AppVersion={#APP_VERSION}
 AppVerName={#MyAppName} {#APP_VERSION}
@@ -17,6 +19,11 @@ AppPublisher=mciart
 AppPublisherURL=https://github.com/mciart/morse
 AppSupportURL=https://github.com/mciart/morse/issues
 AppUpdatesURL=https://github.com/mciart/morse/releases
+VersionInfoCompany=mciart
+VersionInfoCopyright=Copyright (C) mciart
+VersionInfoDescription=摩斯输入安装程序
+VersionInfoProductName=摩斯输入
+VersionInfoVersion={#APP_VERSION}
 DefaultDirName={localappdata}\Programs\MorseWriter
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -62,7 +69,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "MorseWriter"; Flags: deletevalue; Tasks: not autostart
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "运行摩斯输入"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--from-installer"; Description: "运行摩斯输入"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent shellexec
 
 [Code]
 const

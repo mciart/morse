@@ -214,6 +214,16 @@ class SettingsWindowSizer(QObject):
         self._connect_screen()
         return self._screen.availableGeometry() if self._screen else QRect(0, 0, 800, 600)
 
+    def apply_initial_size(self):
+        """Resize while hidden so the first show is not a tiny default dialog."""
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            self.fit_to_screen(initial=True)
+        finally:
+            self._busy = False
+
     def _refresh(self):
         if self._busy or not self.window.isVisible():
             return

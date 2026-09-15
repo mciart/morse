@@ -129,6 +129,15 @@ class InstallerUpgradeTests(unittest.TestCase):
         self.assertNotIn('filesandordirs', section)
         self.assertNotIn('*', section)
 
+    def test_installer_uses_mutex_shell_launch_and_file_metadata(self):
+        from windows_integration import INSTANCE_ID
+        text = (PROJECT / 'MorseWriterInstaller.iss').read_text(encoding='utf-8')
+        self.assertIn('AppMutex=' + INSTANCE_ID, text)
+        self.assertIn('Parameters: "--from-installer"', text)
+        self.assertRegex(text, r'Flags: postinstall nowait skipifsilent shellexec')
+        self.assertIn('VersionInfoCompany=mciart', text)
+        self.assertIn('VersionInfoProductName=摩斯输入', text)
+
     @unittest.skipUnless(sys.platform == 'win32' and COMPILER.is_file(),
                          'Requires the bundled Inno Setup compiler')
     def test_actual_pascal_policy_preserves_current_and_explicit_preferences(self):

@@ -278,3 +278,41 @@ class DesktopIntegrationTests(TestCase):
         with patch.object(self.window.startup_registration, 'set_enabled') as register:
             self.window.presentAtLaunch(startup=True)
             register.assert_not_called()
+
+    def test_audio_selector_stays_off_screen_until_opened(self):
+        selector = self.window.audioSelector
+        self.assertFalse(selector.isVisible())
+        self.assertTrue(selector.testAttribute(morse.Qt.WA_DontShowOnScreen))
+        selector.show()
+        self.assertFalse(selector.testAttribute(morse.Qt.WA_DontShowOnScreen))
+
+    def test_session_end_quits_so_installer_can_replace_files(self):
+        with patch.object(self.window, 'quitApplication') as quit:
+            self.window.startDesktopIntegration()
+            self.window._commitSessionData(None)
+            quit.assert_called_once_with()
+        self.window.startDesktopIntegration()
+        self.assertTrue(self.window.trayIcon.isVisible())
+
+    def test_tray_retry_timer_runs_on_windows_platform(self):
+        with patch.object(morse.QApplication, 'platformName', return_value='windows'):
+            self.window.startDesktopIntegration()
+        self.assertTrue(self.window._tray_retry_timer.isActive())
+        self.window._tray_retry_timer.stop()
+
+    def test_second_launch_activation_restores_hidden_window_and_tray(self):
+        self.window.hide()
+        self.window.activateRunningInstance()
+        self.assertTrue(self.window.isVisible())
+        self.assertTrue(self.window.trayIcon.isVisible())
+
+    def test_installer_launch_announces_tray(self):
+        with patch.object(self.window.trayIcon, 'showMessage') as balloon:
+            self.window._announceInstallerTray()
+        self.assertEqual(balloon.call_args[0][0], '摩斯输入')
+        self.assertIn('系统托盘', balloon.call_args[0][1])
+
+    def test_hidden_settings_keep_a_native_handle_for_the_tray(self):
+        self.window.hide()
+        self.assertTrue(self.window.testAttribute(morse.Qt.WA_WState_Created))
+        self.assertTrue(self.window.trayIcon.isVisible())
