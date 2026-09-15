@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from PyQt5.QtWidgets import QAbstractButton, QStyle, QStyleOptionComboBox
+from PyQt5.QtWidgets import QAbstractButton, QDialog, QStyle, QStyleOptionComboBox, QWidget
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -202,6 +202,11 @@ class WindowBehaviorTests(unittest.TestCase):
         collected = self.window.collect_config()
         for key in ("keyone", "keytwo", "keythree", "tone_frequency", "tone_volume"):
             self.assertEqual(collected[key], morse.DEFAULT_CONFIG[key])
+        self.assertNotIn('fastMorseMode', collected)
+        for key in ('winposx', 'winposy', 'winxaxis', 'winyaxis'):
+            self.assertNotIn(key, collected)
+        self.assertIsInstance(self.window, QWidget)
+        self.assertNotIsInstance(self.window, QDialog)
 
         self.start_input()
         self.assertEqual(self.window.config, collected)

@@ -103,7 +103,9 @@ def _legacy_preferences(directory, defaults):
         values = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(values, dict):
             return None
-        allowed = set(defaults) | {"fastMorseMode"}
+        allowed = set(defaults) | {
+            "fastMorseMode", "winposx", "winposy", "winxaxis", "winyaxis",
+        }
         result = {}
         for key, value in values.items():
             if key not in allowed or not isinstance(value, (str, int, float, bool, type(None))):

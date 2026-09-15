@@ -34,7 +34,11 @@ def read_key_data(source_path):
                                     and isinstance(target.value, ast.Name)
                                     and target.value.id == "self"
                                     and target.attr == "key_data"):
-                                return ast.literal_eval(statement.value)
+                                try:
+                                    return ast.literal_eval(statement.value)
+                                except (ValueError, TypeError):
+                                    from key_catalog import KEY_DATA
+                                    return KEY_DATA
     raise ValueError("未找到 ConfigManager.key_data 字典")
 
 

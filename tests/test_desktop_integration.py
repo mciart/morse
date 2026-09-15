@@ -96,7 +96,8 @@ class DesktopIntegrationTests(TestCase):
     def test_hotkey_choice_is_applied_persisted_and_can_be_disabled(self):
         with patch.object(self.window.guide_hotkey, 'set_sequence') as register:
             self.window.startDesktopIntegration()
-            register.assert_called_with('Ctrl+Alt+Shift+M')
+            register.assert_called_with('')
+            self.window.hotkeyEnabledCheck.setChecked(True)
             self.window.hotkeyEdit.setKeySequence(morse.QKeySequence('Ctrl+Shift+F10'))
             self.window.hotkeyApplyButton.click()
             register.assert_called_with('Ctrl+Shift+F10')
@@ -110,6 +111,7 @@ class DesktopIntegrationTests(TestCase):
         first = self.window.iconGroupBox.layout().itemAt(0).widget()
         self.assertEqual(first.title(), '启动与快捷键')
         self.assertIn('开机自启', self.window.startupCheckbox.text())
+        self.assertEqual(self.window.hotkeyEnabledCheck.parent().title(), '高级：额外显隐快捷键')
         self.assertEqual(self.window.startupCheckbox.isEnabled(),
                          self.window.startup_registration.supported)
 
@@ -127,6 +129,7 @@ class DesktopIntegrationTests(TestCase):
         self.assertTrue(self.window.startupCheckbox.isChecked())  # Failed disable rolls back.
 
     def test_f22_can_be_selected_without_a_physical_function_key(self):
+        self.window.hotkeyEnabledCheck.setChecked(True)
         selector = self.window.hotkeyPresetComboBox
         for number in range(13, 25):
             self.assertGreaterEqual(selector.findData(f'F{number}'), 0)
@@ -145,6 +148,7 @@ class DesktopIntegrationTests(TestCase):
         self.assertEqual(self.window.selectedGuideHotkey(), 'Ctrl+Shift+F10')
 
     def test_hotkey_rejects_a_key_already_used_for_morse_input(self):
+        self.window.hotkeyEnabledCheck.setChecked(True)
         selector = self.window.hotkeyPresetComboBox
         selector.setCurrentIndex(selector.findData('F22'))
         box = self.window.iconComboBoxKeyOne
@@ -179,6 +183,7 @@ class DesktopIntegrationTests(TestCase):
         self.assertEqual(self.window.configManager.config['pinyin_layer_mode'], 'toggle')
 
     def test_disabling_pinyin_restores_same_key_single_hotkey(self):
+        self.window.hotkeyEnabledCheck.setChecked(True)
         self.window.hotkeyPresetComboBox.setCurrentIndex(self.window.hotkeyPresetComboBox.findData('F22'))
         with patch.object(self.window.guide_hotkey, 'set_sequence') as register:
             self.window.startDesktopIntegration()
@@ -273,7 +278,9 @@ class DesktopIntegrationTests(TestCase):
     def test_default_theme_is_system_and_first_launch_does_not_register_startup(self):
         self.assertEqual(morse.DEFAULT_CONFIG['theme'], 'system')
         self.assertFalse(morse.DEFAULT_CONFIG['start_in_tray'])
+        self.assertEqual(morse.DEFAULT_CONFIG['guide_hotkey'], '')
         self.assertFalse(self.window.startInTrayCheckbox.isChecked())
+        self.assertFalse(self.window.hotkeyEnabledCheck.isChecked())
         self.assertEqual(self.window.themeComboBox.currentData(), 'system')
         with patch.object(self.window.startup_registration, 'set_enabled') as register:
             self.window.presentAtLaunch(startup=True)

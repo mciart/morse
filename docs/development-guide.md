@@ -25,7 +25,7 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-英文码表由 `user_data/layouts.json` 的统一布局、`morse_profiles.py` 的标准化处理和 `MorseCodeGUI.py` 的动作定义共同生成。拼音码表直接使用运行时的 `pinyin_codes.build_pinyin_layout`，声母、韵母及控制码保持同源。保存的基础布局仍只有 `desktop`；拼音层在内存中派生，旧用户布局也在内存中迁移，不覆盖原文件。
+英文码表由 `user_data/layouts.json` 的统一布局、`morse_profiles.py` 的标准化处理和 `key_catalog.py` 的动作定义共同生成。拼音码表直接使用运行时的 `pinyin_codes.build_pinyin_layout`，声母、韵母及控制码保持同源。保存的基础布局仍只有 `desktop`；拼音层在内存中派生，旧用户布局也在内存中迁移，不覆盖原文件。
 
 修改映射后先执行 `tools/generate_codechart.py`，再用 `--check` 同时检查 `codechart.md` 与 `docs/pinyin-code-chart.md`。`guide_gesture.py` 负责拼音层与码表显隐手势：`toggle` 模式双击切层、单击显隐，`hold` 模式按住拼音、松开英文、双击显隐。新用户默认 `toggle`，旧 `toggle` 配置沿用新手势，已有 `hold` 配置保持不变。单击最多等待 300 毫秒以区分双击；等待期间输入点划会确认显隐，电码仍归属当前层。`KeyboardOutput.send_pinyin` 输出逐个拉丁按键以进入目标拼音输入法。测试使用模拟键鼠和音频，不能替代实际输入法、设备延迟或游戏兼容性验证。
 

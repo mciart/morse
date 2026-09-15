@@ -36,14 +36,17 @@ def verify_interface_features(window):
     preset = window.hotkeyPresetComboBox
     previous_index = preset.currentIndex()
     previous_sequence = window.hotkeyEdit.keySequence()
+    previous_enabled = window.hotkeyEnabledCheck.isChecked()
     saved_hotkey = window.config['guide_hotkey']
     try:
         index = preset.findData('F22')
         assert index >= 0, 'F22 is missing from shortcut presets'
+        window.hotkeyEnabledCheck.setChecked(True)
         preset.setCurrentIndex(index)
         assert window.selectedGuideHotkey() == 'F22'
         assert window.config['guide_hotkey'] == saved_hotkey, 'Selecting a preset must not register it'
     finally:
+        window.hotkeyEnabledCheck.setChecked(previous_enabled)
         preset.setCurrentIndex(previous_index)
         window.hotkeyEdit.setKeySequence(previous_sequence)
 

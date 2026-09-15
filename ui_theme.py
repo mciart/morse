@@ -2,7 +2,7 @@
 
 import sys
 
-from PyQt5.QtCore import QEvent, QObject, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QAbstractNativeEventFilter, QEvent, QObject, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PyQt5.QtWidgets import QWidget
 from PyQt5 import sip
@@ -411,6 +411,33 @@ def apply_dark_theme(app):
     return apply_theme(app, "dark")
 
 
+# WM_SETTINGCHANGE, WM_THEMECHANGED, WM_DWMCOLORIZATIONCOLORCHANGED
+_WINDOWS_THEME_MESSAGES = (0x001A, 0x031A, 0x0320)
+
+
+class _WindowsThemeEventFilter(QAbstractNativeEventFilter):
+    """Refresh when Windows reports a system color or theme change."""
+
+    def __init__(self, manager):
+        super().__init__()
+        self.manager = manager
+
+    def nativeEventFilter(self, eventType, message):
+        try:
+            manager = self.manager
+            if manager is None or not message:
+                return False, 0
+            if eventType not in (b'windows_generic_MSG', b'windows_dispatcher_MSG'):
+                return False, 0
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message in _WINDOWS_THEME_MESSAGES:
+                QTimer.singleShot(0, manager._on_system_hint)
+        except (TypeError, ValueError, OSError, RuntimeError):
+            pass
+        return False, 0
+
+
 class ThemeManager(QObject):
     """Apply a saved preference and track changes to the system app theme."""
 
@@ -421,11 +448,30 @@ class ThemeManager(QObject):
         self.app = app
         self._mode = None
         self._resolved_theme = None
+        self._native_filter = None
         _remember_system_palette(app)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.refresh)
+        if sys.platform == "win32" and app.platformName() == "windows":
+            self._native_filter = _WindowsThemeEventFilter(self)
+            app.installNativeEventFilter(self._native_filter)
+            native = self._native_filter
+            self.destroyed.connect(
+                lambda *_args, application=app, filter=native:
+                ThemeManager._drop_native_filter(application, filter))
+        app.installEventFilter(self)
         self.set_mode(mode)
+
+    @staticmethod
+    def _drop_native_filter(app, native):
+        if native is None:
+            return
+        native.manager = None
+        try:
+            app.removeNativeEventFilter(native)
+        except RuntimeError:
+            pass
 
     @property
     def mode(self):
@@ -435,18 +481,31 @@ class ThemeManager(QObject):
     def resolved_theme(self):
         return self._resolved_theme
 
+    def _uses_theme_timer(self):
+        return sys.platform != "win32"
+
+    def _on_system_hint(self):
+        if self._mode == "system":
+            self.refresh()
+
+    def eventFilter(self, watched, event):
+        if (self._mode == "system" and watched is self.app and
+                event.type() == QEvent.ApplicationPaletteChange):
+            QTimer.singleShot(0, self._on_system_hint)
+        return False
+
     def set_mode(self, mode):
         if mode not in THEME_MODES:
             raise ValueError("Unknown theme mode: %s" % mode)
         self._mode = mode
-        if mode == "system":
+        if mode == "system" and self._uses_theme_timer():
             self._timer.start()
         else:
             self._timer.stop()
         self.refresh()
 
     def refresh(self):
-        """Poll the native preference; avoid restyling unchanged widgets."""
+        """Re-read the native preference; avoid restyling unchanged widgets."""
         resolved = detect_system_theme(self.app) if self._mode == "system" else self._mode
         if resolved != self._resolved_theme:
             apply_theme(self.app, resolved)

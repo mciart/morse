@@ -50,7 +50,7 @@ class ConfigStoreTests(unittest.TestCase):
         with self.assertLogs(level='WARNING'):
             config = config_store.normalize_config(values, DEFAULT_CONFIG)
         for key in values:
-            self.assertEqual(config[key], DEFAULT_CONFIG[key], key)
+            self.assertEqual(config.get(key), DEFAULT_CONFIG.get(key), key)
 
     def test_valid_legacy_numbers_keys_and_mode_migrate(self):
         values = dict(fontsizescale='125', maxDitTime='350.5', keylen='2',
@@ -65,6 +65,16 @@ class ConfigStoreTests(unittest.TestCase):
         self.assertEqual(config['keytwo'], 'MOUSE_X2')
         self.assertEqual(config['keyer_mode'], 'iambic')
         self.assertEqual(config['pinyin_layer_mode'], 'hold')
+
+    def test_legacy_offsets_and_saved_hotkey_are_still_read(self):
+        values = dict(DEFAULT_CONFIG, guide_hotkey='Ctrl+Alt+Shift+M',
+                      winposx=15, winposy=-8, winxaxis='right', winyaxis='bottom')
+        config = config_store.normalize_config(values, DEFAULT_CONFIG)
+        self.assertEqual(config['guide_hotkey'], 'Ctrl+Alt+Shift+M')
+        self.assertEqual(config['winposx'], 15)
+        self.assertEqual(config['winposy'], -8)
+        self.assertEqual(config['winxaxis'], 'right')
+        self.assertEqual(config['winyaxis'], 'bottom')
 
     def test_unknown_input_key_uses_only_its_own_default(self):
         self.path.write_text(json.dumps(dict(keyone='missing', keytwo='F24', theme='dark')),
@@ -124,6 +134,17 @@ class ConfigStoreTests(unittest.TestCase):
         self.assertEqual(manager.config, values)
         self.assertIsNone(manager.last_save_error)
         self.assertEqual(list(self.directory.iterdir()), [self.path])
+
+    def test_save_drops_legacy_duplicate_fields(self):
+        manager = ConfigManager(str(self.path))
+        values = dict(manager.config, fastMorseMode=True, keyer_mode='iambic',
+                      winposx=10, winposy=20, winxaxis='left', winyaxis='top')
+        self.assertTrue(manager.save_config(values))
+        saved = json.loads(self.path.read_text(encoding='utf-8'))
+        for key in ('fastMorseMode', 'winposx', 'winposy', 'winxaxis', 'winyaxis'):
+            self.assertNotIn(key, saved)
+            self.assertNotIn(key, manager.config)
+        self.assertEqual(saved['keyer_mode'], 'iambic')
 
     def assert_failed_save_preserves_original(self, manager, values):
         before = dict(manager.config)

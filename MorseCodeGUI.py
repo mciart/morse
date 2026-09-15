@@ -10,7 +10,7 @@ from PyQt5 import QtCore
 from PyQt5.QtMultimedia import QAudioDeviceInfo, QAudio
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt, QLocale, QTranslator, QLibraryInfo
 from PyQt5.QtGui import QIcon, QKeySequence
-from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QGridLayout, QSpinBox,
+from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QSpinBox,
                              QGroupBox, QHBoxLayout, QLabel, QMessageBox, QButtonGroup,
                              QPushButton, QRadioButton, QSystemTrayIcon, QVBoxLayout,
                              QWidget, QApplication, QMenu, QScrollArea, QKeySequenceEdit)
@@ -35,6 +35,7 @@ from windows_integration import (StartupRegistration, GlobalHotkey, parse_hotkey
                                  SingleInstance)
 from app_paths import bootstrap_assets, layouts_seed_path
 from app_paths import user_data_dir as writable_user_data_dir
+from key_catalog import KEY_DATA
 
 
 # Logging is installed by the executable; importing the UI never overwrites logs.
@@ -65,16 +66,19 @@ DEFAULT_CONFIG = {
   "upperchars": True,
   "autostart": False,
   "start_in_tray": False,
-  "guide_hotkey": DEFAULT_GLOBAL_HOTKEY,
+  "guide_hotkey": "",
   "pinyin_layer_enabled": True,
   "pinyin_layer_key": "F22",
   "pinyin_layer_mode": "toggle",
-  "pinyin_ime_sync": False,
-  "winxaxis": "left",
-  "winyaxis": "top",
-  "winposx": 10,
-  "winposy": 10
+  "pinyin_ime_sync": False
 }
+
+# Still read and migrated; dropped the next time settings are written.
+_UNSAVED_CONFIG_KEYS = ('fastMorseMode', 'winposx', 'winposy', 'winxaxis', 'winyaxis')
+
+
+def _without_unsaved_config_keys(config):
+    return {key: value for key, value in config.items() if key not in _UNSAVED_CONFIG_KEYS}
 
 
 class AudioDeviceSelector(QWidget):
@@ -122,143 +126,7 @@ class AudioDeviceSelector(QWidget):
 
 class ConfigManager:
     def __init__(self, config_file=None, default_config=DEFAULT_CONFIG):
-        self.key_data = {
-        "A": {'label': 'a', 'key_code': 'a', 'character': 'a', 'arg': None},
-        "B": {'label': 'b', 'key_code': 'b', 'character': 'b', 'arg': None},
-        "C": {'label': 'c', 'key_code': 'c', 'character': 'c', 'arg': None},
-        "D": {'label': 'd', 'key_code': 'd', 'character': 'd', 'arg': None},
-        "E": {'label': 'e', 'key_code': 'e', 'character': 'e', 'arg': None},
-        "F": {'label': 'f', 'key_code': 'f', 'character': 'f', 'arg': None},
-        "G": {'label': 'g', 'key_code': 'g', 'character': 'g', 'arg': None},
-        "H": {'label': 'h', 'key_code': 'h', 'character': 'h', 'arg': None},
-        "I": {'label': 'i', 'key_code': 'i', 'character': 'i', 'arg': None},
-        "J": {'label': 'j', 'key_code': 'j', 'character': 'j', 'arg': None},
-        "K": {'label': 'k', 'key_code': 'k', 'character': 'k', 'arg': None},
-        "L": {'label': 'l', 'key_code': 'l', 'character': 'l', 'arg': None},
-        "M": {'label': 'm', 'key_code': 'm', 'character': 'm', 'arg': None},
-        "N": {'label': 'n', 'key_code': 'n', 'character': 'n', 'arg': None},
-        "O": {'label': 'o', 'key_code': 'o', 'character': 'o', 'arg': None},
-        "P": {'label': 'p', 'key_code': 'p', 'character': 'p', 'arg': None},
-        "Q": {'label': 'q', 'key_code': 'q', 'character': 'q', 'arg': None},
-        "R": {'label': 'r', 'key_code': 'r', 'character': 'r', 'arg': None},
-        "S": {'label': 's', 'key_code': 's', 'character': 's', 'arg': None},
-        "T": {'label': 't', 'key_code': 't', 'character': 't', 'arg': None},
-        "U": {'label': 'u', 'key_code': 'u', 'character': 'u', 'arg': None},
-        "V": {'label': 'v', 'key_code': 'v', 'character': 'v', 'arg': None},
-        "W": {'label': 'w', 'key_code': 'w', 'character': 'w', 'arg': None},
-        "X": {'label': 'x', 'key_code': 'x', 'character': 'x', 'arg': None},
-        "Y": {'label': 'y', 'key_code': 'y', 'character': 'y', 'arg': None},
-        "Z": {'label': 'z', 'key_code': 'z', 'character': 'z', 'arg': None},
-        "ONE": {'label': '1', 'key_code': '1', 'character': '1', 'arg': None},
-        "TWO": {'label': '2', 'key_code': '2', 'character': '2', 'arg': None},
-        "THREE": {'label': '3', 'key_code': '3', 'character': '3', 'arg': None},
-        "FOUR": {'label': '4', 'key_code': '4', 'character': '4', 'arg': None},
-        "FIVE": {'label': '5', 'key_code': '5', 'character': '5', 'arg': None},
-        "SIX": {'label': '6', 'key_code': '6', 'character': '6', 'arg': None},
-        "SEVEN": {'label': '7', 'key_code': '7', 'character': '7', 'arg': None},
-        "EIGHT": {'label': '8', 'key_code': '8', 'character': '8', 'arg': None},
-        "NINE": {'label': '9', 'key_code': '9', 'character': '9', 'arg': None},
-        "ZERO": {'label': '0', 'key_code': '0', 'character': '0', 'arg': None},
-        "BACKTICK": {'label': '`', 'key_code': '`', 'character': '`', 'arg': None},
-        "DOT": {'label': '.', 'key_code': '.', 'character': '.', 'arg': None},
-        "COMMA": {'label': ',', 'key_code': ',', 'character': ',', 'arg': None},
-        "QUESTION": {'label': '?', 'key_code': 'shift+/', 'character': '?', 'arg': None},
-        "EXCLAMATION": {'label': '!', 'key_code': 'shift+1', 'character': '!', 'arg': None},
-        "COLON": {'label': ':', 'key_code': 'shift+;', 'character': ':', 'arg': None},
-        "SEMICOLON": {'label': ';', 'key_code': ';', 'character': ';', 'arg': None},
-        "AT": {'label': '@', 'key_code': 'shift+2', 'character': '@', 'arg': None},
-        "HASH": {'label': '#', 'key_code': 'shift+3', 'character': '#', 'arg': None},
-        "DOLLAR": {'label': '$', 'key_code': 'shift+4', 'character': '$', 'arg': None},
-        "PERCENT": {'label': '%', 'key_code': 'shift+5', 'character': '%', 'arg': None},
-        "AMPERSAND": {'label': '&', 'key_code': 'shift+7', 'character': '&', 'arg': None},
-        "STAR": {'label': '*', 'key_code': 'shift+8', 'character': '*', 'arg': None},
-        "PLUS": {'label': '+', 'key_code': 'shift+=', 'character': '+', 'arg': None},
-        "MINUS": {'label': '-', 'key_code': '-', 'character': '-', 'arg': None},
-        "EQUALS": {'label': '=', 'key_code': '=', 'character': '=', 'arg': None},
-        "FSLASH": {'label': '/', 'key_code': '/', 'character': '/', 'arg': None},
-        "BSLASH": {'label': '\\', 'key_code': '\\', 'character': '\\', 'arg': None},
-        "SINGLEQUOTE": {'label': "'", 'key_code': "'", 'character': "'", 'arg': None},
-        "DOUBLEQUOTE": {'label': '"', 'key_code': "shift+'", 'character': '"', 'arg': None},
-        "OPENBRACKET": {'label': '(', 'key_code': 'shift+9', 'character': '(', 'arg': None},
-        "CLOSEBRACKET": {'label': ')', 'key_code': 'shift+0', 'character': ')', 'arg': None},
-        "LESSTHAN": {'label': '<', 'key_code': 'shift+,', 'character': '<', 'arg': None},
-        "MORETHAN": {'label': '>', 'key_code': 'shift+.', 'character': '>', 'arg': None},
-        "CIRCONFLEX": {'label': '^', 'key_code': 'shift+6', 'character': '^', 'arg': None},
-        "ENTER": {'label': '回车', 'key_code': 'enter', 'character': '\n', 'arg': None},
-        "SPACE": {'label': '空格', 'key_code': 'space', 'character': ' ', 'arg': None},
-        "BACKSPACE": {'label': '退格', 'key_code': 'backspace', 'character': '\x08', 'arg': None},
-        "TAB": {'label': 'tab', 'key_code': 'tab', 'character': '\t', 'arg': None},
-        "TABLEFT": {'label': '左向Tab', 'key_code': 'shift+tab', 'character': None, 'arg': None},
-        "UNDERSCORE": {'label': '_', 'key_code': 'shift+-', 'character': '_', 'arg': None},
-        "PAGEUP": {'label': '上一页', 'key_code': 'page_up', 'character': None, 'arg': None},
-        "PAGEDOWN": {'label': '下一页', 'key_code': 'page_down', 'character': None, 'arg': None},
-        "LEFTARROW": {'label': '左', 'key_code': 'left', 'character': None, 'arg': None},
-        "RIGHTARROW": {'label': '右', 'key_code': 'right', 'character': None, 'arg': None},
-        "UPARROW": {'label': '上', 'key_code': 'up', 'character': None, 'arg': None},
-        "DOWNARROW": {'label': '下', 'key_code': 'down', 'character': None, 'arg': None},
-        "ESCAPE": {'label': 'esc', 'key_code': 'esc', 'character': None, 'arg': None},
-        "HOME": {'label': '行首', 'key_code': 'home', 'character': None, 'arg': None},
-        "END": {'label': '行尾', 'key_code': 'end', 'character': None, 'arg': None},
-        "DELETE": {'label': '删除', 'key_code': 'delete', 'character': None, 'arg': None},
-        "SHIFT": {'label': 'shift', 'key_code': 'shift', 'character': None, 'arg': None, 'toggle_action': True},
-        "RSHIFT": {'label': '右Shift', 'key_code': 'right shift', 'character': None, 'arg': None, 'toggle_action': True},
-        "LSHIFT": {'label': '左Shift', 'key_code': 'left shift', 'character': None, 'arg': None, 'toggle_action': True},
-        "CTRL": {'label': 'ctrl', 'key_code': 'ctrl', 'character': None, 'arg': None, 'toggle_action': True},
-        "RCTRL": {'label': '右Ctrl', 'key_code': 'right ctrl', 'character': None, 'arg': None, 'toggle_action': True},
-        "LCTRL": {'label': '左Ctrl', 'key_code': 'left ctrl', 'character': None, 'arg': None, 'toggle_action': True},
-        "ALT": {'label': 'alt', 'key_code': 'alt', 'character': None, 'arg': None, 'toggle_action': True},
-        "INSERT": {'label': '插入', 'key_code': 'insert', 'character': None, 'arg': None},
-        "WINDOWS": {'label': 'win', 'key_code': 'windows', 'character': None, 'arg': None, 'toggle_action': True},
-        "STARTMENU": {'label': '开始菜单', 'key_code': 'windows', 'character': None, 'arg': None},
-        "APPLICATION": {'label': '应用菜单', 'key_code': 'menu', 'character': None, 'arg': None},
-        "CAPSLOCK": {'label': '大写锁定', 'key_code': 'caps lock', 'character': None, 'arg': None},
-        "F1": {'label': 'F1', 'key_code': 'f1', 'character': None, 'arg': None},
-        "F2": {'label': 'F2', 'key_code': 'f2', 'character': None, 'arg': None},
-        "F3": {'label': 'F3', 'key_code': 'f3', 'character': None, 'arg': None},
-        "F4": {'label': 'F4', 'key_code': 'f4', 'character': None, 'arg': None},
-        "F5": {'label': 'F5', 'key_code': 'f5', 'character': None, 'arg': None},
-        "F6": {'label': 'F6', 'key_code': 'f6', 'character': None, 'arg': None},
-        "F7": {'label': 'F7', 'key_code': 'f7', 'character': None, 'arg': None},
-        "F8": {'label': 'F8', 'key_code': 'f8', 'character': None, 'arg': None},
-        "F9": {'label': 'F9', 'key_code': 'f9', 'character': None, 'arg': None},
-        "F10": {'label': 'F10', 'key_code': 'f10', 'character': None, 'arg': None},
-        "F11": {'label': 'F11', 'key_code': 'f11', 'character': None, 'arg': None},
-        "F12": {'label': 'F12', 'key_code': 'f12', 'character': None, 'arg': None},
-        "REPEATMODE": {'label': '修饰键锁定', 'key_code': 'REPEATMODE', 'character': None, 'arg': 0},
-        "SOUND": {'label': '提示音', 'key_code': 'unknown', 'character': None, 'arg': 8},
-        "MOUSERIGHT5": {'label': '右移5', 'key_code': 'MOUSERIGHT5', 'character': None, 'arg': 2},
-        "MOUSEUP5": {'label': '上移5', 'key_code': 'MOUSEUP5', 'character': None, 'arg': 3},
-        "MOUSECLICKLEFT": {'label': '左键单击', 'key_code': 'MOUSECLICKLEFT', 'character': None, 'arg': 4},
-        "MOUSEDBLCLICKLEFT": {'label': '左键双击', 'key_code': 'MOUSEDBLCLICKLEFT', 'character': None, 'arg': 5},
-        "MOUSECLKHLDLEFT": {'label': '按住左键', 'key_code': 'MOUSECLKHLDLEFT', 'character': None, 'arg': 6},
-        "MOUSEUPLEFT5": {'label': '左上5', 'key_code': 'MOUSEUPLEFT5', 'character': None, 'arg': 7},
-        "MOUSEDOWNLEFT5": {'label': '左下5', 'key_code': 'MOUSEDOWNLEFT5', 'character': None, 'arg': 8},
-        "MOUSERELEASEHOLD": {'label': '松开鼠标', 'key_code': 'MOUSERELEASEHOLD', 'character': None, 'arg': 9},
-        "MOUSELEFT5": {'label': '左移5', 'key_code': 'MOUSELEFT5', 'character': None, 'arg': 0},
-        "MOUSEDOWN5": {'label': '下移5', 'key_code': 'MOUSEDOWN5', 'character': None, 'arg': 1},
-        "MOUSECLICKRIGHT": {'label': '右键单击', 'key_code': 'MOUSECLICKRIGHT', 'character': None, 'arg': 2},
-        "MOUSEDBLCLICKRIGHT": {'label': '右键双击', 'key_code': 'MOUSEDBLCLICKRIGHT', 'character': None, 'arg': 3},
-        "MOUSECLKHLDRIGHT": {'label': '按住右键', 'key_code': 'MOUSECLKHLDRIGHT', 'character': None, 'arg': 4},
-        "MOUSEUPRIGHT5": {'label': '右上5', 'key_code': 'MOUSEUPRIGHT5', 'character': None, 'arg': 5},
-        "MOUSEDOWNRIGHT5": {'label': '右下5', 'key_code': 'MOUSEDOWNRIGHT5', 'character': None, 'arg': 6},
-        "MOUSENORMALMODE": {'label': '普通模式', 'key_code': 'NORMALMODE', 'character': None, 'arg': 7},
-        "MOUSEUP40": {'label': '上移40', 'key_code': 'MOUSEUP40', 'character': None, 'arg': 8},
-        "MOUSEUP250": {'label': '上移250', 'key_code': 'MOUSEUP250', 'character': None, 'arg': 9},
-        "MOUSEDOWN40": {'label': '下移40', 'key_code': 'MOUSEDOWN40', 'character': None, 'arg': 0},
-        "MOUSEDOWN250": {'label': '下移250', 'key_code': 'MOUSEDOWN250', 'character': None, 'arg': 1},
-        "MOUSELEFT40": {'label': '左移40', 'key_code': 'MOUSELEFT40', 'character': None, 'arg': 2},
-        "MOUSELEFT250": {'label': '左移250', 'key_code': 'MOUSELEFT250', 'character': None, 'arg': 3},
-        "MOUSERIGHT40": {'label': '右移40', 'key_code': 'MOUSERIGHT40', 'character': None, 'arg': 4},
-        "MOUSERIGHT250": {'label': '右移250', 'key_code': 'MOUSERIGHT250', 'character': None, 'arg': 5},
-        "MOUSEUPLEFT40": {'label': '左上40', 'key_code': 'MOUSEUPLEFT40', 'character': None, 'arg': 6},
-        "MOUSEUPLEFT250": {'label': '左上250', 'key_code': 'MOUSEUPLEFT250', 'character': None, 'arg': 7},
-        "MOUSEDOWNLEFT40": {'label': '左下40', 'key_code': 'MOUSEDOWNLEFT40', 'character': None, 'arg': 8},
-        "MOUSEDOWNLEFT250": {'label': '左下250', 'key_code': 'MOUSEDOWNLEFT250', 'character': None, 'arg': 9},
-        "MOUSEUPRIGHT40": {'label': '右上40', 'key_code': 'MOUSEUPRIGHT40', 'character': None, 'arg': 0},
-        "MOUSEUPRIGHT250": {'label': '右上250', 'key_code': 'MOUSEUPRIGHT250', 'character': None, 'arg': 1},
-        "MOUSEDOWNRIGHT40": {'label': '右下40', 'key_code': 'MOUSEDOWNRIGHT40', 'character': None, 'arg': 2},
-        "MOUSEDOWNRIGHT250": {'label': '右下250', 'key_code': 'MOUSEDOWNRIGHT250', 'character': None, 'arg': 3}
-        }
+        self.key_data = KEY_DATA
         self.config_file = config_file or os.path.join(writable_user_data_dir(), 'config.json')
         self.default_config = default_config
         self.last_save_error = None
@@ -281,6 +149,7 @@ class ConfigManager:
         return read_config(self.config_file, self.default_config, valid_keys=keys)
 
     def save_config(self, config):
+        config = _without_unsaved_config_keys(config)
         try:
             write_config(self.config_file, config)
         except (OSError, ValueError, TypeError) as error:
@@ -482,7 +351,7 @@ class RepeatOnAction(Action):
         else:
             raise ValueError("Repeat On callback is not callable")
 
-class Window(QDialog):
+class Window(QWidget):
     def __init__(self, layoutManager=None, configManager=None):
         super(Window, self).__init__()
         self.setWindowTitle("摩斯输入设置")
@@ -809,7 +678,6 @@ class Window(QDialog):
             'fontsizescale': self.fontSizeScaleEdit.value(),
             'autostart': self.autostartCheckbox.isChecked(),
             'start_in_tray': self.startInTrayCheckbox.isChecked(),
-            'fastMorseMode': self.fastMorseModeCheckbox.isChecked() if self.keySelectionRadioOneKey.isChecked() is False else False,
         }
         if include_bindings:
             config.update({
@@ -819,7 +687,7 @@ class Window(QDialog):
                 'pinyin_layer_mode': self.selectedPinyinMode(),
                 'pinyin_ime_sync': self.imeSyncCheck.isChecked(),
             })
-        return config
+        return _without_unsaved_config_keys(config)
 
     def goForIt(self):
         key_one = self.iconComboBoxKeyOne.currentData()
@@ -1238,7 +1106,7 @@ class Window(QDialog):
             if layer_error:
                 self.pinyinKeyError(layer_error)
             self.applyImeSync()
-            sequence = self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)
+            sequence = self.config.get('guide_hotkey') or ''
             if sequence:
                 inputs = [self.config.get(name) for name in
                           ('keyone', 'keytwo', 'keythree')[:int(self.config.get('keylen', 1))]]
@@ -1350,9 +1218,6 @@ class Window(QDialog):
             self.startupCheckbox.setToolTip(str(error))
         self.startupCheckbox.clicked.connect(self.changeStartupRegistration)
         startup_layout.addWidget(self.startupCheckbox)
-        startup_hint = QLabel('勾选后立即写入当前用户的开机启动项；取消勾选即关闭。')
-        startup_hint.setWordWrap(True)
-        startup_layout.addWidget(startup_hint)
         self.startInTrayCheckbox = QCheckBox('启动后默认收进系统托盘')
         self.startInTrayCheckbox.setToolTip('从桌面、开始菜单或任务栏打开时不弹出设置窗口，只保留托盘图标。登录自启始终收进托盘。')
         self.startInTrayCheckbox.setChecked(self.config.get('start_in_tray', False))
@@ -1360,10 +1225,12 @@ class Window(QDialog):
         self.autostartCheckbox = QCheckBox('启动后自动开始输入')
         self.autostartCheckbox.setChecked(self.config.get('autostart', False))
         startup_layout.addWidget(self.autostartCheckbox)
-        self.hotkeyEnabledCheck = QCheckBox('额外的单击显隐快捷键')
-        self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey', DEFAULT_GLOBAL_HOTKEY)))
+        hotkey_group = QGroupBox('高级：额外显隐快捷键')
+        hotkey_layout = QVBoxLayout(hotkey_group)
+        self.hotkeyEnabledCheck = QCheckBox('启用额外的单击显隐快捷键')
+        self.hotkeyEnabledCheck.setChecked(bool(self.config.get('guide_hotkey')))
         self.hotkeyEnabledCheck.setEnabled(self.guide_hotkey.supported)
-        startup_layout.addWidget(self.hotkeyEnabledCheck)
+        hotkey_layout.addWidget(self.hotkeyEnabledCheck)
         shortcut_row = ResponsiveSettingsRow()
         self.hotkeyEdit = QKeySequenceEdit(QKeySequence(self.config.get('guide_hotkey') or DEFAULT_GLOBAL_HOTKEY))
         self.hotkeyEdit.setToolTip('按下新的组合键后点击“应用”；未开始输入时切换设置窗口。')
@@ -1381,11 +1248,12 @@ class Window(QDialog):
         self.hotkeyApplyButton.setEnabled(self.guide_hotkey.supported)
         self.hotkeyApplyButton.clicked.connect(self.saveGuideHotkey)
         shortcut_row.addWidget(self.hotkeyApplyButton)
-        startup_layout.addLayout(shortcut_row)
-        startup_layout.addWidget(self.hotkeyEdit)
-        self.hotkeyStatus = QLabel('可直接选择 F22，再点击“应用”；隐藏码表时输入继续运行。')
+        hotkey_layout.addLayout(shortcut_row)
+        hotkey_layout.addWidget(self.hotkeyEdit)
+        self.hotkeyStatus = QLabel('默认关闭。日常请用 F22；需要时再开启，可选择功能键或自定义组合键，然后点击“应用”。')
         self.hotkeyStatus.setWordWrap(True)
-        startup_layout.addWidget(self.hotkeyStatus)
+        hotkey_layout.addWidget(self.hotkeyStatus)
+        startup_layout.addWidget(hotkey_group)
         inputSettingsLayout.addWidget(startup_group)
 
         inputRadioGroup = QGroupBox("按键数量")

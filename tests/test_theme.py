@@ -49,8 +49,13 @@ class ThemeTests(unittest.TestCase):
             self.manager = ui_theme.ThemeManager(self.app)
             self.assertEqual(self.manager.mode, "system")
             self.assertEqual(self.manager.resolved_theme, "light")
-            self.assertTrue(self.manager._timer.isActive())
-            self.assertEqual(self.manager._timer.interval(), 1000)
+            if sys.platform == "win32":
+                self.assertFalse(self.manager._timer.isActive())
+                if self.app.platformName() == "windows":
+                    self.assertIsNotNone(self.manager._native_filter)
+            else:
+                self.assertTrue(self.manager._timer.isActive())
+                self.assertEqual(self.manager._timer.interval(), 1000)
             changed = QSignalSpy(self.manager.themeChanged)
             detect.return_value = "dark"
             self.manager._timer.timeout.emit()
@@ -73,7 +78,10 @@ class ThemeTests(unittest.TestCase):
             detect.return_value = "light"
             self.manager.set_mode("system")
             self.assertEqual(self.manager.resolved_theme, "light")
-            self.assertTrue(self.manager._timer.isActive())
+            if sys.platform == "win32":
+                self.assertFalse(self.manager._timer.isActive())
+            else:
+                self.assertTrue(self.manager._timer.isActive())
 
     def test_colors_keep_imported_reference_and_palette_matches(self):
         reference = ui_theme.THEME_COLORS
