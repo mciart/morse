@@ -312,7 +312,20 @@ class DesktopIntegrationTests(TestCase):
         self.assertEqual(balloon.call_args[0][0], '摩斯输入')
         self.assertIn('系统托盘', balloon.call_args[0][1])
 
-    def test_hidden_settings_keep_a_native_handle_for_the_tray(self):
+    def test_hidden_launch_clears_off_screen_flag_so_tray_can_appear(self):
         self.window.hide()
-        self.assertTrue(self.window.testAttribute(morse.Qt.WA_WState_Created))
+        self.window.setAttribute(morse.Qt.WA_DontShowOnScreen, True)
+        self.window.presentAtLaunch(startup=True)
+        self.assertFalse(self.window.isVisible())
+        self.assertFalse(self.window.testAttribute(morse.Qt.WA_DontShowOnScreen))
+        self.assertTrue(self.window.trayIcon.isVisible())
+        self.assertIs(self.window.trayIcon.parent(), self.app)
+
+    def test_start_in_tray_does_not_mark_settings_off_screen(self):
+        self.window.hide()
+        self.window.setAttribute(morse.Qt.WA_DontShowOnScreen, True)
+        self.window.config['start_in_tray'] = True
+        self.window.presentAtLaunch(startup=False)
+        self.assertFalse(self.window.isVisible())
+        self.assertFalse(self.window.testAttribute(morse.Qt.WA_DontShowOnScreen))
         self.assertTrue(self.window.trayIcon.isVisible())

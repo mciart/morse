@@ -600,7 +600,7 @@ class Window(QDialog):
         mainLayout.addWidget(self.settings_actions)
         self.setLayout(mainLayout)
         self.setIcon()
-        self.trayIcon.show()
+        self._showTrayIcon()
         self.updateTrayInputState()
         self.settings_sizer = SettingsWindowSizer(
             self, self.settings_scroll, self.settings_actions)
@@ -866,6 +866,8 @@ class Window(QDialog):
         timer = getattr(self, '_tray_retry_timer', None)
         if timer is not None:
             timer.stop()
+        if hasattr(self, 'trayIcon'):
+            self.trayIcon.hide()
         app = QApplication.instance()
         if app is not None:
             try:
@@ -899,6 +901,14 @@ class Window(QDialog):
     def _revealWindow(self):
         self.setAttribute(Qt.WA_DontShowOnScreen, False)
 
+    def _showTrayIcon(self):
+        if self._shutting_down or not hasattr(self, 'trayIcon'):
+            return
+        self._revealWindow()
+        if self.trayIcon.icon().isNull():
+            self.setIcon()
+        self.trayIcon.show()
+
     def show(self):
         self._revealWindow()
         super().show()
@@ -930,9 +940,7 @@ class Window(QDialog):
             if timer is not None:
                 timer.stop()
             return
-        if self.trayIcon.icon().isNull():
-            self.setIcon()
-        self.trayIcon.show()
+        self._showTrayIcon()
         self._tray_retries += 1
         if timer is not None and self._tray_retries >= 15:
             timer.stop()
@@ -1288,6 +1296,10 @@ class Window(QDialog):
                 QTimer.singleShot(600, self._announceInstallerTray)
         finally:
             self._start_hidden = False
+            # Keep the window hidden if requested, but never leave it marked
+            # off-screen: that also hides the tray icon on Windows.
+            self._revealWindow()
+            self._showTrayIcon()
 
     def _announceInstallerTray(self):
         if self._shutting_down or not hasattr(self, 'trayIcon'):
@@ -1742,11 +1754,9 @@ class Window(QDialog):
         self.trayIconMenu.addAction(self.onOpenSettingsAction)
         self.trayIconMenu.addSeparator()
         self.trayIconMenu.addAction(self.quitAction)
-        # Creating the HWND off-screen lets a never-shown settings dialog still
-        # host a tray icon after installer or start-in-tray launches.
-        self.setAttribute(Qt.WA_DontShowOnScreen, True)
-        self.winId()
-        self.trayIcon = QSystemTrayIcon(self)
+        # Parent the icon to the application so a hidden settings dialog cannot
+        # take the notification-area entry with it.
+        self.trayIcon = QSystemTrayIcon(QApplication.instance())
         self.trayIcon.setToolTip("摩斯输入")
         self.trayIcon.setContextMenu(self.trayIconMenu)
 
