@@ -313,12 +313,6 @@ class DesktopIntegrationTests(TestCase):
         self.assertTrue(self.window.isVisible())
         self.assertTrue(self.window.trayIcon.isVisible())
 
-    def test_installer_launch_announces_tray(self):
-        with patch.object(self.window.trayIcon, 'showMessage') as balloon:
-            self.window._announceInstallerTray()
-        self.assertEqual(balloon.call_args[0][0], '摩斯输入')
-        self.assertIn('系统托盘', balloon.call_args[0][1])
-
     def test_hidden_launch_clears_off_screen_flag_so_tray_can_appear(self):
         self.window.hide()
         self.window.setAttribute(morse.Qt.WA_DontShowOnScreen, True)

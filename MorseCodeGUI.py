@@ -1160,22 +1160,12 @@ class Window(QWidget):
                 self.start()
             elif not self._start_hidden:
                 self.show()
-            if '--from-installer' in sys.argv:
-                QTimer.singleShot(600, self._announceInstallerTray)
         finally:
             self._start_hidden = False
             # Keep the window hidden if requested, but never leave it marked
             # off-screen: that also hides the tray icon on Windows.
             self._revealWindow()
             self._showTrayIcon()
-
-    def _announceInstallerTray(self):
-        if self._shutting_down or not hasattr(self, 'trayIcon'):
-            return
-        self.ensureTrayVisible()
-        self.trayIcon.showMessage(
-            '摩斯输入', '程序已在系统托盘中运行。可点击托盘图标打开窗口。',
-            QSystemTrayIcon.Information, 5000)
 
     def updateTrayInputState(self):
         if hasattr(self, 'onOffAction'):

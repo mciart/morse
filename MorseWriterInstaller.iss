@@ -68,9 +68,6 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MorseWriter"; ValueData: """{app}\{#MyAppExeName}"" --startup"; Flags: uninsdeletevalue; Tasks: autostart
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "MorseWriter"; Flags: deletevalue; Tasks: not autostart
 
-[Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--from-installer"; Description: "运行摩斯输入"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent shellexec
-
 [Code]
 const
   MorseWriterUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{2DB71CE2-A8F1-4EB9-BA6D-EE1EAD16659C}_is1';

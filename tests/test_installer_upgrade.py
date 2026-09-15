@@ -129,12 +129,13 @@ class InstallerUpgradeTests(unittest.TestCase):
         self.assertNotIn('filesandordirs', section)
         self.assertNotIn('*', section)
 
-    def test_installer_uses_mutex_shell_launch_and_file_metadata(self):
+    def test_installer_uses_mutex_and_file_metadata(self):
         from windows_integration import INSTANCE_ID
         text = (PROJECT / 'MorseWriterInstaller.iss').read_text(encoding='utf-8')
         self.assertIn('AppMutex=' + INSTANCE_ID, text)
-        self.assertIn('Parameters: "--from-installer"', text)
-        self.assertRegex(text, r'Flags: postinstall nowait skipifsilent shellexec')
+        self.assertNotIn('[Run]', text)
+        self.assertNotIn('--from-installer', text)
+        self.assertNotIn('postinstall', text)
         self.assertIn('VersionInfoCompany=mciart', text)
         self.assertIn('VersionInfoProductName=摩斯输入', text)
 

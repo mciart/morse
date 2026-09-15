@@ -23,7 +23,7 @@
 
 ## 快速开始
 
-Windows 10 / 11 的 64 位用户可直接下载 [最新版安装包](https://github.com/mciart/morse/releases/latest)，运行 `MorseWriter-Setup-v版本号-x64.exe`。安装向导为简体中文，无需另装 Python，默认安装到当前用户目录；首次启动的界面主题跟随系统。从浏览器下载时 Windows 可能提示无法验证发布者，选择“更多信息”后仍可运行。
+Windows 10 / 11 的 64 位用户可直接下载 [最新版安装包](https://github.com/mciart/morse/releases/latest)，运行 `MorseWriter-Setup-v版本号-x64.exe`。安装向导为简体中文，无需另装 Python，默认安装到当前用户目录；安装完成后请从开始菜单打开。首次启动的界面主题跟随系统。从浏览器下载时 Windows 可能提示无法验证发布者，选择“更多信息”后仍可运行。
 
 需要从源码运行时，安装 Python 3 和 Git，在 PowerShell 中执行：
 
